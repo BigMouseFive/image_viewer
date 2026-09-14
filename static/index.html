@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>A+ 图片评审台</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand">
+        <h1>A+ 图片评审台</h1>
+        <span>图片检查、修改复核与交付管理</span>
+      </div>
+      <nav class="main-tabs" id="mainTabs" aria-label="主要功能">
+        <button type="button" data-view="overview">概览与目录</button>
+        <button type="button" data-view="review">图片评审</button>
+        <button type="button" data-view="revisions">修改复核</button>
+        <button type="button" data-view="delivery">交付管理</button>
+      </nav>
+    </header>
+
+    <section class="view-panel overview-panel" id="overviewView">
+      <div class="overview-heading">
+        <div><h2>当前工作区</h2><p>管理图片目录、扫描状态与评审进度。</p></div>
+        <div class="overview-actions">
+          <select id="sourceSelect" aria-label="图片目录"></select>
+          <button id="manageSourcesButton" type="button">管理目录</button>
+          <button id="scanButton" type="button">重新扫描</button>
+        </div>
+      </div>
+      <div class="summary-grid" id="summaryGrid"></div>
+      <section class="overview-card"><h3>评审状态</h3><div class="status-summary" id="reviewSummary"></div></section>
+      <section class="overview-card"><h3>清单状态</h3><div class="status-summary" id="inventorySummary"></div></section>
+    </section>
+
+    <section class="view-panel assets-panel" id="assetsView" hidden>
+      <div class="list-toolbar">
+        <div class="filter-toolbar">
+          <div class="list-actions">
+            <button id="batchDeliveryButton" type="button" hidden>批量创建并同步 A+</button>
+            <button id="queueDimensionRepairsButton" type="button" hidden>将所有可修复尺寸异常加入队列</button>
+            <input id="search" placeholder="搜索 SKU / 模块" aria-label="搜索 SKU 或模块" />
+            <span class="stats" id="stats"></span>
+          </div>
+          <div class="filter-row" id="reviewFilters"><div class="filter-label">评审状态</div><div class="tabs" id="tabs" aria-label="图片状态筛选"></div></div>
+          <div class="filter-row" id="inventoryFilters"><div class="filter-label">清单状态</div><div class="tabs inventory-tabs" id="inventoryTabs" aria-label="清单状态筛选"></div></div>
+          <div class="filter-row" id="deliveryFilters" hidden><div class="filter-label">交付视图</div><div class="tabs delivery-tabs"><button type="button" data-delivery-mode="deliverable">可交付</button><button type="button" data-delivery-mode="delivered">已交付</button></div></div>
+        </div>
+      </div>
+      <main class="groups" id="groups"></main>
+      <div id="loadMoreSentinel" aria-hidden="true"></div>
+    </section>
+
+    <div class="modal" id="reviewModal" role="dialog" aria-modal="true" aria-labelledby="reviewTitle">
+      <div class="box">
+        <h3 id="reviewTitle"></h3>
+        <details class="product-info" id="productInfo">
+          <summary>查看商品信息（标题 / 五点描述）</summary>
+          <div class="product-info-content">
+            <div><strong>商品标题</strong><p id="productTitle" class="product-copy"></p></div>
+            <div><strong>五点描述</strong><p id="productBullets" class="product-copy"></p></div>
+          </div>
+        </details>
+        <div class="comparison" id="comparison">
+          <figure id="referencePanel">
+            <figcaption><span>产品主图</span><span class="zoom-help">滚轮缩放 · 拖拽移动 · 双击复位</span></figcaption>
+            <div class="zoom-viewport" data-zoom-viewport>
+              <img id="referencePreview" class="preview" alt="产品主图" draggable="false" />
+              <div id="referenceMissing" class="reference-missing">未找到对应产品主图</div>
+              <output class="zoom-level" aria-live="polite">100%</output>
+            </div>
+          </figure>
+          <figure class="generated-panel">
+            <figcaption><span id="generatedCaption">当前评审图</span><span class="zoom-help">滚轮缩放 · 拖拽移动 · 双击复位</span></figcaption>
+            <div class="zoom-viewport" data-zoom-viewport>
+              <img id="preview" class="preview" alt="图片预览" draggable="false" />
+              <output class="zoom-level" aria-live="polite">100%</output>
+            </div>
+          </figure>
+        </div>
+        <div id="reviewControls" class="review-controls">
+          <section class="alt-text-editor">
+            <div class="suggestion-heading"><strong>Alt Text（随交付自动带入，不会显示在图片中）</strong><span id="altTextStatus" class="muted"></span></div>
+            <textarea id="altText" maxlength="100" placeholder="英文客观描述，最多 100 个字符"></textarea>
+          </section>
+          <section class="review-editor">
+            <div class="suggestion-heading">
+              <strong>快捷评论</strong>
+              <button id="manageSuggestionsButton" type="button">管理快捷评论</button>
+            </div>
+            <div class="suggestions" id="suggestions"></div>
+            <textarea id="comments" placeholder="补充具体修改意见；每行一条"></textarea>
+          </section>
+          <div class="row review-actions">
+            <a id="openIopaintButton" class="button-link iopaint-button" data-action="open-iopaint" target="_blank" rel="noopener">消除</a>
+            <button type="button" data-review-status="needs_revision">需修改</button>
+            <button type="button" data-review-status="approved">OK</button>
+            <button type="button" data-review-status="ignored">忽略</button>
+            <button type="button" data-action="close-review">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal nested-modal" id="suggestionModal" role="dialog" aria-modal="true" aria-labelledby="suggestionTitle">
+      <div class="box suggestion-manager">
+        <button class="close" type="button" data-action="close-suggestions" aria-label="关闭">×</button>
+        <h2 id="suggestionTitle">管理快捷评论</h2>
+        <p class="muted">修改模板不会影响已经保存到历史评审中的意见。</p>
+        <div id="suggestionList" class="suggestion-list"></div>
+        <hr />
+        <h3 id="suggestionFormTitle">添加快捷评论</h3>
+        <form id="suggestionForm">
+          <input id="suggestionId" type="hidden" />
+          <label for="suggestionName">按钮名称</label>
+          <input id="suggestionName" maxlength="100" required placeholder="例如：产品颜色不一致" />
+          <label for="suggestionContent">插入文案</label>
+          <textarea id="suggestionContent" maxlength="2000" required placeholder="点击快捷评论后插入修改意见框的完整内容"></textarea>
+          <div class="row">
+            <button id="saveSuggestionButton" type="submit">添加</button>
+            <button id="cancelSuggestionEditButton" type="button" hidden>取消编辑</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal" id="sourceModal" role="dialog" aria-modal="true" aria-labelledby="sourceTitle">
+      <div class="box directory">
+        <button class="close" type="button" data-action="close-sources" aria-label="关闭">×</button>
+        <h2 id="sourceTitle">管理图片目录</h2>
+        <div id="sourceList"></div>
+        <hr />
+        <p class="muted">只能选择 image-reviewer 配置的允许根目录及其子目录。</p>
+        <div class="row">
+          <input id="dirPath" style="flex: 1" placeholder="输入服务端目录绝对路径" />
+          <button id="browseButton" type="button">浏览</button>
+          <button id="addSourceButton" type="button">添加当前目录</button>
+        </div>
+        <div id="browser"></div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

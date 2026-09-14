@@ -1,0 +1,9 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+Pillow>=10.0
+PyYAML>=6.0
+python-multipart>=0.0.9
+pytest>=8.0
+# Required by Starlette's FastAPI TestClient in the installed Starlette version.
+httpx2>=2.0.0

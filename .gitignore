@@ -1,0 +1,12 @@
+# Python and test artifacts
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Runtime state: reviews, backups, uploaded candidates, locks and local audits.
+data/
+logs/
+
+# Editor/OS local state
+.DS_Store
