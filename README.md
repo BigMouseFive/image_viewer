@@ -89,9 +89,13 @@ The desktop UI uses a left sidebar with four views:
 1. **概览与目录** — select/manage source directories, rescan, and inspect source path, manifest/reference information, totals, SKU count, scan time, review counts, and inventory counts.
 2. **图片评审** — main review workspace with multi-select review/inventory filters, search, lazy loading, image comparison, comments, Alt Text, refresh, and IOPaint.
 3. **修改复核** — fixed view of `需修改` and `已修改` images for human follow-up.
-4. **交付管理** — `可交付` and `已交付` views.
+4. **交付管理** — pending `可交付` and current `已交付` views, with delivery-change focus filters.
 
-The browser persists the current view, review-status selection, inventory-status selection, delivery subview, search text, and scroll position in `localStorage`. Reloading restores the same view and position after content loads.
+`可交付` is intentionally a **pending delivery** list rather than a list of every technically valid historical SKU: it includes only first deliveries, images changed since the most recent synced delivery, or changed Alt Text. Unchanged historical delivery snapshots remain under `已交付`, so they do not bury new work.
+
+Within `可交付`, use **最近图片调整** as a locating shortcut for every SKU whose image bytes/revision differ from its most recent synced snapshot. It also includes products whose changed image is still `已修改`/待人工复核, so recent work is not hidden; such groups are visibly marked **待复核，暂不可交付** and their delivery button is disabled until the five-image gate passes. Groups are sorted by most recent image-content change and display the affected `A+Lxx` module(s) plus the prior delivery version. **Alt Text 已调整** and **首次交付** are available as separate focus filters.
+
+The browser persists the current view, review-status selection, inventory-status selection, delivery subview/focus filter, search text, and scroll position in `localStorage`. Reloading restores the same view and position after content loads.
 
 ## Review and inventory status
 
@@ -222,7 +226,7 @@ A SKU can create an A+ delivery version only when all fixed modules `A+L01`–`A
 - every image has Alt Text;
 - no product exception or duplicate/path/manifest issue exists.
 
-The system never creates a partial five-image delivery. Changed images must be reviewed again before a new delivery. Delivery snapshots are immutable and fingerprinted: their content URLs include the frozen revision/SHA and return `409` rather than serving later changed bytes.
+The system never creates a partial five-image delivery. Changed images must be reviewed again before a new delivery. Once all five current images are confirmed, the delivery screen compares their asset ID/revision/SHA and Alt Text against the latest synced snapshot for that SKU. It creates a new pending-delivery entry only for a first delivery or a real image/Alt Text change; ordinary review clicks do not affect the image-change ordering. Delivery snapshots are immutable and fingerprinted: their content URLs include the frozen revision/SHA and return `409` rather than serving later changed bytes.
 
 ## Data, backups, and recovery
 

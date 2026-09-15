@@ -1,5 +1,7 @@
 import os
+from datetime import datetime
 from pathlib import Path
+import sqlite3
 import tempfile
 import time
 
@@ -10,7 +12,14 @@ from app.db import Database
 from app.scanner import refresh_asset, scan
 from app.inventory import apply_product_exceptions, attach_references, filter_inventory, reconcile, reference_images
 from app.iopaint import backup_asset, resolve_editable_asset
-from app.main import AIRevisionBatch, attach_delivery_eligibility, delivery_slots_and_errors
+from app.main import (
+    AIRevisionBatch,
+    attach_delivery_eligibility,
+    delivery_counts,
+    delivery_filter_matches,
+    delivery_slots_and_errors,
+    delivery_sort_key,
+)
 from app.ai_revision.service import RevisionJobError, instructions_hash, validate_candidate
 
 
@@ -25,6 +34,52 @@ def write_image(path, color, size=(16, 12)):
     Image.new("RGB", size, color).save(path)
     current = time.time_ns()
     os.utime(path, ns=(current, current))
+
+
+def test_legacy_migration_preserves_latest_content_change_time(tmp_path):
+    database_path = tmp_path / "legacy-reviews.db"
+    with sqlite3.connect(database_path) as con:
+        con.executescript("""
+            CREATE TABLE assets (
+              id INTEGER PRIMARY KEY, sku TEXT NOT NULL, module TEXT NOT NULL,
+              relative_path TEXT NOT NULL, size INTEGER NOT NULL, mtime REAL NOT NULL,
+              sha256 TEXT NOT NULL, width INTEGER, height INTEGER,
+              revision INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'unreviewed',
+              comments TEXT NOT NULL DEFAULT '', reviewed_revision INTEGER NOT NULL DEFAULT -1,
+              discovered_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE versions (
+              id INTEGER PRIMARY KEY, asset_id INTEGER NOT NULL, revision INTEGER NOT NULL,
+              sha256 TEXT NOT NULL, comments TEXT NOT NULL, created_at TEXT NOT NULL,
+              UNIQUE(asset_id, revision)
+            );
+        """)
+        con.execute(
+            """INSERT INTO assets(
+               id,sku,module,relative_path,size,mtime,sha256,width,height,revision,status,
+               comments,reviewed_revision,discovered_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                7, "SKU-1", "SKU-1_A+L01", "SKU-1/SKU-1_A+L01.png", 1, 1.0,
+                "current-sha", 970, 600, 2, "approved", "", 2,
+                "2026-08-01T00:00:00+00:00", "2026-09-10T00:00:00+00:00",
+            ),
+        )
+        # Scanner/AI writes the archived prior revision at the time the current
+        # image content was introduced. Migration must retain that ordering cue.
+        con.execute(
+            "INSERT INTO versions(asset_id,revision,sha256,comments,created_at) VALUES(?,?,?,?,?)",
+            (7, 1, "prior-sha", "", "2026-09-09T12:00:00+00:00"),
+        )
+
+    db = Database(database_path)
+    source_id = db.add_source("legacy", str(tmp_path / "images"))
+    db.migrate_legacy(source_id)
+
+    migrated = db.assets(source_id)
+    assert len(migrated) == 1
+    assert migrated[0]["revision"] == 2
+    assert migrated[0]["content_updated_at"] == "2026-09-09T12:00:00+00:00"
 
 
 def test_scanner_records_decoded_format_not_only_filename_extension(tmp_path):
@@ -185,6 +240,109 @@ def test_delivery_eligibility_marks_only_complete_sku():
         assert not any(item["sku_deliverable"] for item in attach_delivery_eligibility(items))
     finally:
         __import__("app.main", fromlist=["db"]).db = original
+
+
+def test_delivery_view_prioritizes_only_changed_or_initial_skus(tmp_path, monkeypatch):
+    db = Database(tmp_path / "reviews.db")
+    monkeypatch.setattr(__import__("app.main", fromlist=["db"]), "db", db)
+    root = tmp_path / "images"
+    source_id = make_source(db, root)
+    now_value = "2026-09-15T12:00:00+00:00"
+    rows = []
+    for sku in ("UNCHANGED", "CHANGED", "INITIAL"):
+        for index in range(1, 6):
+            module = f"A+L{index:02d}"
+            rows.append((
+                source_id, sku, module, f"{sku}/{sku}_{module}.png", 1, 1.0,
+                f"{sku}-{index}-sha", 970, 600, "PNG", 0, "delivered" if sku == "UNCHANGED" else "approved",
+                "", 0, now_value, now_value, now_value,
+            ))
+    with db.connect() as con:
+        con.executemany(
+            """INSERT INTO assets(
+               source_id,sku,module,relative_path,size,mtime,sha256,width,height,image_format,
+               revision,status,comments,reviewed_revision,discovered_at,content_updated_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            rows,
+        )
+    assets = db.assets(source_id)
+    by_sku = {}
+    for asset in assets:
+        by_sku.setdefault(asset["sku"], []).append(asset)
+        db.upsert_alt_text(asset["id"], f"{asset['sku']} {asset['module']}", "test", "ready", asset["revision"])
+
+    def saved_alt_text(asset_id):
+        value = db.alt_text(asset_id)
+        assert value is not None
+        return value["alt_text"]
+
+    # Freeze an already-synced v1 for UNCHANGED and CHANGED. CHANGED then gets
+    # a freshly reviewed image revision in A+L03; its old snapshot remains v1.
+    for sku in ("UNCHANGED", "CHANGED"):
+        slots = [
+            {
+                "slot_key": f"slot-{index}", "sequence": index, "module": f"A+L{index:02d}",
+                "asset_id": asset["id"], "revision": asset["revision"], "sha256": asset["sha256"],
+                "width": 970, "height": 600,
+                "alt_text": saved_alt_text(asset["id"]),
+            }
+            for index, asset in enumerate(by_sku[sku], start=1)
+        ]
+        delivery = db.create_delivery(f"source-{sku}", sku, "uae-aplus-five-image-v1", f"fingerprint-{sku}", ["B000000001"], slots)
+        with db.connect() as con:
+            con.execute("UPDATE aplus_deliveries SET status='synced' WHERE id=?", (delivery["id"],))
+
+    changed = next(asset for asset in by_sku["CHANGED"] if asset["module"] == "A+L03")
+    metadata_changed = next(asset for asset in by_sku["CHANGED"] if asset["module"] == "A+L01")
+    with db.connect() as con:
+        con.execute(
+            """UPDATE assets
+               SET revision=1, sha256=?, status='approved', reviewed_revision=1,
+                   content_updated_at=?, updated_at=?
+               WHERE id=?""",
+            ("changed-new-sha", "2026-09-16T08:00:00+00:00", "2026-09-16T08:00:00+00:00", changed["id"]),
+        )
+        con.execute(
+            "UPDATE aplus_alt_texts SET alt_text=?,updated_at=? WHERE asset_id=?",
+            ("Later metadata edit", "2026-09-17T08:00:00+00:00", metadata_changed["id"]),
+        )
+
+    attached = attach_delivery_eligibility(reconcile(db.assets(source_id), None), source_id)
+    summary_by_sku = {}
+    for item in attached:
+        summary_by_sku.setdefault(item["sku"], item["delivery"])
+
+    assert summary_by_sku["UNCHANGED"]["state"] == "delivered_current"
+    assert summary_by_sku["UNCHANGED"]["required"] is False
+    assert summary_by_sku["CHANGED"]["state"] == "image_updated"
+    assert summary_by_sku["CHANGED"]["required"] is True
+    assert summary_by_sku["CHANGED"]["image_changed_modules"] == ["A+L03"]
+    assert summary_by_sku["CHANGED"]["metadata_changed_modules"] == ["A+L01"]
+    changed_item = next(item for item in attached if item["sku"] == "CHANGED")
+    assert delivery_filter_matches(changed_item, "deliverable", "image_updated") is True
+    pending_changed = dict(
+        changed_item,
+        delivery=dict(changed_item["delivery"], ready=False, required=False),
+    )
+    assert delivery_filter_matches(pending_changed, "deliverable", "image_updated") is True
+    assert delivery_filter_matches(pending_changed, "deliverable", "all") is False
+    # A later metadata save must not make an older image revision look newer
+    # than another image-adjusted product in the delivery ordering.
+    assert delivery_sort_key(changed_item, "deliverable")[1] == -datetime.fromisoformat(
+        "2026-09-16T08:00:00+00:00"
+    ).timestamp()
+    assert summary_by_sku["INITIAL"]["state"] == "initial_delivery"
+    assert summary_by_sku["INITIAL"]["required"] is True
+    assert delivery_counts(attached) == {
+        "deliverable": 2,
+        "image_updated": 1,
+        "image_updated_ready": 1,
+        "image_updated_pending_review": 0,
+        "metadata_updated": 0,
+        "metadata_updated_ready": 0,
+        "initial_delivery": 1,
+        "delivered": 1,
+    }
 
 
 def test_delivery_versions_are_immutable_and_fingerprinted(tmp_path):

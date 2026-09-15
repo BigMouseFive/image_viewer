@@ -79,7 +79,8 @@ class Database:
               relative_path TEXT NOT NULL, size INTEGER NOT NULL, mtime REAL NOT NULL, sha256 TEXT NOT NULL,
               width INTEGER, height INTEGER, image_format TEXT, revision INTEGER NOT NULL DEFAULT 0,
               status TEXT NOT NULL DEFAULT 'unreviewed', comments TEXT NOT NULL DEFAULT '',
-              reviewed_revision INTEGER NOT NULL DEFAULT -1, discovered_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+              reviewed_revision INTEGER NOT NULL DEFAULT -1, discovered_at TEXT NOT NULL,
+              content_updated_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
               UNIQUE(source_id, relative_path), FOREIGN KEY(source_id) REFERENCES image_sources(id)
             );
             CREATE TABLE IF NOT EXISTS versions (
@@ -171,8 +172,9 @@ class Database:
                   relative_path TEXT NOT NULL, size INTEGER NOT NULL, mtime REAL NOT NULL, sha256 TEXT NOT NULL,
                   width INTEGER, height INTEGER, image_format TEXT, revision INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'unreviewed',
                   comments TEXT NOT NULL DEFAULT '', reviewed_revision INTEGER NOT NULL DEFAULT -1,
-                  discovered_at TEXT NOT NULL, updated_at TEXT NOT NULL, missing INTEGER NOT NULL DEFAULT 0,
-                  mtime_ns INTEGER, ctime_ns INTEGER, UNIQUE(source_id, relative_path)
+                  discovered_at TEXT NOT NULL, content_updated_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
+                  missing INTEGER NOT NULL DEFAULT 0, mtime_ns INTEGER, ctime_ns INTEGER,
+                  UNIQUE(source_id, relative_path)
                 )""")
                 # The default source is created during application startup, so keep
                 # legacy rows until it can be associated with that source.
@@ -185,6 +187,21 @@ class Database:
                 con.execute("ALTER TABLE assets ADD COLUMN ctime_ns INTEGER")
             if "image_format" not in columns:
                 con.execute("ALTER TABLE assets ADD COLUMN image_format TEXT")
+            if "content_updated_at" not in columns:
+                con.execute("ALTER TABLE assets ADD COLUMN content_updated_at TEXT NOT NULL DEFAULT ''")
+            # Keep a stable content-change timestamp separate from updated_at:
+            # review decisions also update updated_at, but delivery prioritization
+            # must reflect the actual image revision time. Existing rows can be
+            # reconstructed from the archived revision immediately before the
+            # current one, falling back to their first discovery time.
+            con.execute("""UPDATE assets
+                           SET content_updated_at=COALESCE(
+                             NULLIF(content_updated_at, ''),
+                             (SELECT MAX(created_at) FROM versions
+                              WHERE versions.asset_id=assets.id
+                                AND versions.revision=assets.revision - 1),
+                             discovered_at, updated_at, ?)
+                           WHERE content_updated_at IS NULL OR content_updated_at=''""", (now(),))
             con.execute("CREATE INDEX IF NOT EXISTS idx_assets_source_order ON assets(source_id, sku, module, relative_path)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_assets_source_status_order ON assets(source_id, status, sku, module, relative_path)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_ai_jobs_status_order ON ai_revision_jobs(status, created_at, id)")
@@ -231,10 +248,18 @@ class Database:
                 return
             con.execute("""INSERT OR IGNORE INTO assets(
               id, source_id, sku, module, relative_path, size, mtime, sha256,
-              width, height, revision, status, comments, reviewed_revision, discovered_at, updated_at
-            ) SELECT id, ?, sku, module, relative_path, size, mtime, sha256,
-              width, height, revision, status, comments, reviewed_revision, discovered_at, updated_at
-              FROM assets_legacy""", (source_id,))
+              width, height, revision, status, comments, reviewed_revision,
+              discovered_at, content_updated_at, updated_at
+            ) SELECT legacy.id, ?, legacy.sku, legacy.module, legacy.relative_path, legacy.size, legacy.mtime, legacy.sha256,
+              legacy.width, legacy.height, legacy.revision, legacy.status, legacy.comments, legacy.reviewed_revision,
+              legacy.discovered_at,
+              COALESCE(
+                (SELECT MAX(versions.created_at) FROM versions
+                 WHERE versions.asset_id=legacy.id AND versions.revision=legacy.revision - 1),
+                legacy.discovered_at, legacy.updated_at, ?
+              ),
+              legacy.updated_at
+              FROM assets_legacy AS legacy""", (source_id, now()))
             con.execute("DROP TABLE assets_legacy")
 
     def source(self, source_id):
@@ -428,6 +453,56 @@ class Database:
         with self.connect() as con:
             row = con.execute("SELECT * FROM aplus_deliveries WHERE fingerprint=?", (fingerprint,)).fetchone()
             return dict(row) if row else None
+
+    def latest_synced_delivery_snapshots(self, source_id, profile_id=None):
+        """Return the latest successful immutable delivery snapshot for each SKU.
+
+        A delivery does not store source_id directly, so scope it through its
+        frozen slot assets. The result deliberately contains only the most
+        recent *synced* delivery: drafts and ready-to-sync records must not
+        make a product look already delivered.
+        """
+        sql = """
+            SELECT deliveries.id AS delivery_id, deliveries.sku, deliveries.profile_id,
+                   deliveries.version, deliveries.created_at, slots.asset_id,
+                   slots.sequence, slots.module, slots.revision, slots.sha256, slots.alt_text
+              FROM aplus_deliveries AS deliveries
+              JOIN aplus_delivery_slots AS slots ON slots.delivery_id=deliveries.id
+              JOIN assets AS assets ON assets.id=slots.asset_id
+             WHERE deliveries.status='synced' AND assets.source_id=?
+        """
+        args = [source_id]
+        if profile_id:
+            sql += " AND deliveries.profile_id=?"
+            args.append(profile_id)
+        sql += " ORDER BY deliveries.sku COLLATE NOCASE, deliveries.version DESC, slots.sequence ASC"
+        with self.connect() as con:
+            rows = [dict(row) for row in con.execute(sql, args)]
+
+        snapshots = {}
+        for row in rows:
+            sku = row["sku"]
+            snapshot = snapshots.get(sku)
+            if snapshot is not None and snapshot["id"] != row["delivery_id"]:
+                continue
+            if snapshot is None:
+                snapshot = {
+                    "id": row["delivery_id"],
+                    "sku": sku,
+                    "profile_id": row["profile_id"],
+                    "version": row["version"],
+                    "created_at": row["created_at"],
+                    "slots": {},
+                }
+                snapshots[sku] = snapshot
+            snapshot["slots"][row["module"]] = {
+                "asset_id": row["asset_id"],
+                "sequence": row["sequence"],
+                "revision": row["revision"],
+                "sha256": row["sha256"],
+                "alt_text": row["alt_text"],
+            }
+        return snapshots
 
     def create_delivery(self, source_delivery_id, sku, profile_id, fingerprint, asins, slots):
         version = self.next_delivery_version(sku)
@@ -943,12 +1018,13 @@ class Database:
             )
             cursor = con.execute(
                 """UPDATE assets SET size=?,mtime=?,mtime_ns=?,ctime_ns=?,sha256=?,width=?,height=?,
-                   revision=?,status='modified_pending_review',reviewed_revision=-1,missing=0,updated_at=?
+                   revision=?,status='modified_pending_review',reviewed_revision=-1,missing=0,
+                   content_updated_at=?,updated_at=?
                    WHERE id=? AND source_id=? AND revision=? AND sha256=?
                      AND status='needs_revision'""",
                 (
                     metadata["size"], metadata["mtime"], metadata["mtime_ns"], metadata["ctime_ns"], metadata["sha256"],
-                    metadata["width"], metadata["height"], current["revision"] + 1, now(), asset_id, source_id,
+                    metadata["width"], metadata["height"], current["revision"] + 1, now(), now(), asset_id, source_id,
                     expected_revision, expected_sha256,
                 ),
             )

@@ -46,6 +46,7 @@
           <div class="filter-row" id="reviewFilters"><div class="filter-label">评审状态</div><div class="tabs" id="tabs" aria-label="图片状态筛选"></div></div>
           <div class="filter-row" id="inventoryFilters"><div class="filter-label">清单状态</div><div class="tabs inventory-tabs" id="inventoryTabs" aria-label="清单状态筛选"></div></div>
           <div class="filter-row" id="deliveryFilters" hidden><div class="filter-label">交付视图</div><div class="tabs delivery-tabs"><button type="button" data-delivery-mode="deliverable">可交付</button><button type="button" data-delivery-mode="delivered">已交付</button></div></div>
+          <div class="filter-row" id="deliveryFocusFilters" hidden><div class="filter-label">快速定位</div><div class="tabs delivery-focus-tabs"><button type="button" data-delivery-focus="all">全部待交付</button><button type="button" data-delivery-focus="image_updated">最近图片调整</button><button type="button" data-delivery-focus="metadata_updated">Alt Text 已调整</button><button type="button" data-delivery-focus="initial_delivery">首次交付</button></div></div>
         </div>
       </div>
       <main class="groups" id="groups"></main>

@@ -32,6 +32,8 @@ const state = {
   reviewStatus: ["all"],
   reviewInventoryStatus: ["all"],
   deliveryMode: "deliverable",
+  deliveryFocus: "all",
+  deliveryCounts: { deliverable: 0, image_updated: 0, metadata_updated: 0, initial_delivery: 0, delivered: 0 },
   inventoryStatus: ["all"],
   sources: [],
   suggestions: [],
@@ -73,6 +75,7 @@ function loadViewState() {
     state.reviewStatus = [...state.status];
     state.reviewInventoryStatus = [...state.inventoryStatus];
     if (["deliverable", "delivered"].includes(saved.deliveryMode)) state.deliveryMode = saved.deliveryMode;
+    if (["all", "image_updated", "metadata_updated", "initial_delivery"].includes(saved.deliveryFocus)) state.deliveryFocus = saved.deliveryFocus;
     if (typeof saved.search === "string") $("#search").value = saved.search;
     if (Number.isFinite(saved.scrollY) && saved.scrollY >= 0) state.restoreScrollY = saved.scrollY;
   } catch (_) {
@@ -87,6 +90,7 @@ function saveViewState() {
       status: state.mainView === "review" ? state.status : state.reviewStatus,
       inventoryStatus: state.mainView === "review" ? state.inventoryStatus : state.reviewInventoryStatus,
       deliveryMode: state.deliveryMode,
+      deliveryFocus: state.deliveryFocus,
       search: $("#search").value,
       scrollY: window.scrollY,
     }));
@@ -256,9 +260,10 @@ function applyMainView(updateFilters = true) {
   $("#reviewFilters").hidden = state.mainView !== "review";
   $("#inventoryFilters").hidden = state.mainView !== "review";
   $("#deliveryFilters").hidden = state.mainView !== "delivery";
+  $("#deliveryFocusFilters").hidden = state.mainView !== "delivery" || state.deliveryMode !== "deliverable";
   $("#batchDeliveryButton").hidden = state.mainView !== "delivery";
   $("#queueDimensionRepairsButton").hidden = state.mainView !== "review";
-  document.querySelectorAll("[data-delivery-mode]").forEach((button) => button.classList.toggle("active", button.dataset.deliveryMode === state.deliveryMode));
+  renderDeliveryControls();
   if (!updateFilters) return;
   if (state.mainView === "review") {
     state.status = [...state.reviewStatus];
@@ -300,7 +305,7 @@ async function loadOverview() {
     ["当前目录", summary.source.name, summary.source.path],
     ["参考文件", `${summary.reference_images} 张产品主图`, manifestDetail],
     ["图片总量", `${summary.total_images} 张`, `期望 ${summary.expected_images} 张`],
-    ["产品数量", `${summary.product_count} 个 SKU`, `${summary.deliverable_skus} 个 SKU 当前可交付`],
+    ["产品数量", `${summary.product_count} 个 SKU`, `${summary.deliverable_skus} 个 SKU 待交付（首次或有变更）`],
     ["最近扫描", scanned, "后台也会周期扫描文件变化"],
   ].map(([label, value, detail]) => `<article class="summary-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small title="${escapeHtml(detail)}">${escapeHtml(detail)}</small></article>`).join("");
   $("#reviewSummary").innerHTML = Object.entries(labels).filter(([key]) => key !== "all").map(([key, label]) =>
@@ -381,7 +386,11 @@ async function load(reset = true) {
   try {
     const query = encodeURIComponent($("#search").value);
     const page = await api(
-      `/api/assets?status=${encodeURIComponent(state.status.join(","))}&inventory_status=${encodeURIComponent(state.inventoryStatus.join(","))}&delivery_status=${state.mainView === "delivery" ? state.deliveryMode : "all"}&q=${query}&limit=${PAGE_SIZE}&offset=${offset}`,
+      `/api/assets?status=${encodeURIComponent(state.status.join(","))}`
+      + `&inventory_status=${encodeURIComponent(state.inventoryStatus.join(","))}`
+      + `&delivery_status=${state.mainView === "delivery" ? state.deliveryMode : "all"}`
+      + `&delivery_focus=${state.mainView === "delivery" && state.deliveryMode === "deliverable" ? state.deliveryFocus : "all"}`
+      + `&q=${query}&limit=${PAGE_SIZE}&offset=${offset}`,
       { signal: state.listController.signal },
     );
     if (token !== state.requestToken || offset !== state.offset) return;
@@ -390,6 +399,8 @@ async function load(reset = true) {
     state.offset += page.items.length;
     state.hasMore = page.has_more;
     state.total = page.total;
+    if (page.delivery_counts) state.deliveryCounts = page.delivery_counts;
+    renderDeliveryControls();
     renderPage(page.items, reset);
     updateStats();
   } catch (error) {
@@ -403,7 +414,52 @@ async function load(reset = true) {
 }
 
 function updateStats() {
-  $("#stats").textContent = `已加载 ${state.assets.length} / ${state.total} 张`;
+  const imageUpdated = Number(state.deliveryCounts?.image_updated || 0);
+  const deliveryHint = state.mainView === "delivery" && state.deliveryMode === "deliverable"
+    ? ` · 最近图片调整 ${imageUpdated} 个 SKU`
+    : "";
+  $("#stats").textContent = `已加载 ${state.assets.length} / ${state.total} 张${deliveryHint}`;
+}
+
+function setDeliveryControl(button, label, count, active) {
+  if (!button) return;
+  button.classList.toggle("active", active);
+  button.setAttribute("aria-pressed", String(active));
+  button.replaceChildren(document.createTextNode(label));
+  if (Number.isFinite(count)) {
+    const badge = document.createElement("span");
+    badge.className = "delivery-count";
+    badge.textContent = String(count);
+    button.appendChild(badge);
+  }
+}
+
+function renderDeliveryControls() {
+  const counts = state.deliveryCounts || {};
+  document.querySelectorAll("[data-delivery-mode]").forEach((button) => {
+    const mode = button.dataset.deliveryMode;
+    setDeliveryControl(
+      button,
+      mode === "deliverable" ? "可交付" : "已交付",
+      Number(counts[mode] || 0),
+      mode === state.deliveryMode,
+    );
+  });
+  const focusLabels = {
+    all: "全部待交付",
+    image_updated: "最近图片调整",
+    metadata_updated: "Alt Text 已调整",
+    initial_delivery: "首次交付",
+  };
+  document.querySelectorAll("[data-delivery-focus]").forEach((button) => {
+    const focus = button.dataset.deliveryFocus;
+    setDeliveryControl(
+      button,
+      focusLabels[focus],
+      Number((focus === "all" ? counts.deliverable : counts[focus]) || 0),
+      focus === state.deliveryFocus,
+    );
+  });
 }
 
 function showListError(error) {
@@ -411,8 +467,71 @@ function showListError(error) {
   $("#stats").textContent = "加载失败";
 }
 
+function formatDeliveryTimestamp(value) {
+  if (!value) return "";
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) return "";
+  return timestamp.toLocaleString();
+}
+
+function deliverySummaryHtml(summary) {
+  if (state.mainView !== "delivery" || !summary) return "";
+  const labels = {
+    image_updated: "图片已调整",
+    metadata_updated: "Alt Text 已调整",
+    initial_delivery: "首次交付",
+    delivered_current: "已交付 · 当前版本一致",
+  };
+  const label = labels[summary.state];
+  if (!label) return "";
+  const previous = summary.latest_synced_delivery?.version;
+  const modules = summary.state === "image_updated"
+    ? summary.image_changed_modules
+    : summary.state === "metadata_updated"
+      ? summary.metadata_changed_modules
+      : [];
+  const changedAt = summary.state === "image_updated" ? formatDeliveryTimestamp(summary.latest_image_updated_at) : "";
+  const details = [
+    previous ? `相较 v${previous}` : "尚无历史交付版本",
+    modules.length ? `涉及 ${modules.join("、")}` : "",
+    changedAt ? `最近调整 ${changedAt}` : "",
+    !summary.ready ? "待复核，暂不可交付" : "",
+    !summary.ready && summary.blocking_reasons?.length
+      ? summary.blocking_reasons.slice(0, 2).join("；")
+      : "",
+  ].filter(Boolean).join(" · ");
+  return `<span class="delivery-summary delivery-${escapeHtml(summary.state)}${summary.ready ? "" : " delivery-blocked"}"><strong>${escapeHtml(label)}</strong>${details ? `<small>${escapeHtml(details)}</small>` : ""}</span>`;
+}
+
+function deliveryChangeHtml(asset) {
+  if (state.mainView !== "delivery" || asset.asset_role === "reference") return "";
+  const summary = asset.delivery;
+  if (!summary) return "";
+  const module = String(asset.module || "").match(/(A\+L\d+)$/)?.[1] || asset.module;
+  if (summary.image_changed_modules?.includes(module)) {
+    const previous = summary.latest_synced_delivery?.version;
+    return `<div class="delivery-change-badge image-change">图片已调整${previous ? ` · 相较 v${previous}` : ""}</div>`;
+  }
+  if (summary.metadata_changed_modules?.includes(module)) {
+    const previous = summary.latest_synced_delivery?.version;
+    return `<div class="delivery-change-badge metadata-change">Alt Text 已调整${previous ? ` · 相较 v${previous}` : ""}</div>`;
+  }
+  return "";
+}
+
 function renderPage(items, reset) {
   if (reset) $("#groups").innerHTML = "";
+  if (reset && !items.length) {
+    const message = state.mainView === "delivery" && state.deliveryMode === "deliverable"
+      ? (state.deliveryFocus === "image_updated"
+        ? "没有发生过图片调整的产品。"
+        : "当前没有需要创建新交付版本的产品。")
+      : (state.mainView === "delivery" && state.deliveryMode === "delivered"
+        ? "当前没有已交付且版本仍一致的产品。"
+        : "没有符合当前筛选条件的图片。");
+    $("#groups").innerHTML = `<p class="empty-list">${escapeHtml(message)}</p>`;
+    return;
+  }
   const grouped = {};
   items.forEach((asset) => (grouped[asset.sku] ??= []).push(asset));
 
@@ -423,19 +542,27 @@ function renderPage(items, reset) {
       section = document.createElement("section");
       section.className = "group";
       section.dataset.sku = sku;
-      section.innerHTML = `<h2>${escapeHtml(sku)} <small></small><button type="button" class="product-exception-button" data-action="toggle-product-exception"></button><button type="button" class="delivery-button" data-action="create-delivery">创建 A+ 交付版本</button></h2><div class="grid"></div>`;
+      section.innerHTML = `<h2><span class="sku-title">${escapeHtml(sku)}</span> <small></small><span class="delivery-summary-slot"></span><button type="button" class="product-exception-button" data-action="toggle-product-exception"></button><button type="button" class="delivery-button" data-action="create-delivery">创建 A+ 交付版本</button></h2><div class="grid"></div>`;
       $("#groups").appendChild(section);
     }
 
     const grid = section.querySelector(".grid");
+    const deliverySummary = assets.find((asset) => asset.delivery)?.delivery;
+    section.querySelector(".delivery-summary-slot").innerHTML = deliverySummaryHtml(deliverySummary);
+    section.classList.toggle("has-image-delivery-change", deliverySummary?.state === "image_updated");
     const isProductException = assets.some((asset) => asset.product_exception);
     const exceptionButton = section.querySelector('[data-action="toggle-product-exception"]');
     exceptionButton.textContent = isProductException ? "解除产品异常" : "标记产品异常";
     exceptionButton.classList.toggle("active", isProductException);
     const deliveryButton = section.querySelector('[data-action="create-delivery"]');
     deliveryButton.hidden = state.mainView === "delivery" && state.deliveryMode === "delivered";
-    deliveryButton.disabled = isProductException;
-    deliveryButton.title = isProductException ? "解除产品异常后才能创建 A+ 交付版本" : "";
+    const deliveryBlocked = Boolean(deliverySummary && !deliverySummary.ready);
+    deliveryButton.disabled = isProductException || deliveryBlocked;
+    deliveryButton.title = isProductException
+      ? "解除产品异常后才能创建 A+ 交付版本"
+      : (deliveryBlocked
+        ? `完成五图复核后才能创建交付：${(deliverySummary.blocking_reasons || []).slice(0, 3).join("；")}`
+        : "");
     const reference = assets.find((asset) => asset.asset_role !== "reference" && asset.reference_images?.length)?.reference_images[0];
     if (reference && !grid.querySelector(".reference-card")) grid.insertAdjacentHTML("beforeend", referenceCardHtml(reference));
     assets.forEach((asset) => grid.insertAdjacentHTML("beforeend", cardHtml(asset)));
@@ -478,6 +605,7 @@ function cardHtml(asset) {
         <div class="inventory-badge">${asset.asset_role === "reference" ? "产品主图" : (inventoryLabels[asset.inventory_status] || "名单外")}${asset.reason ? `：${escapeHtml(asset.reason)}` : ""}</div>
         ${dimensionRepair ? `<div class="dimension-repair-hint">${dimensionQueued ? "已在 AI 尺寸修复队列" : "可加入 AI 尺寸修复队列"}：输出 ${asset.expected_width} × ${asset.expected_height}</div>` : ""}
         ${asset.inventory_status === "invalid_dimensions" ? `<div class="muted">当前 ${asset.width || "?"} × ${asset.height || "?"}；期望 ${asset.expected_width} × ${asset.expected_height}</div>` : ""}
+        ${deliveryChangeHtml(asset)}
         ${asset.asset_role !== "reference" && !dimensionRepair ? `<div class="alt-text-badge ${asset.alt_text ? "" : "empty"}" title="${escapeHtml(asset.alt_text?.alt_text || "")}">Alt Text：${asset.alt_text ? escapeHtml(asset.alt_text.alt_text) : "未导入"}</div>` : ""}
         ${readOnly ? (canPreview ? `<div class="actions"><button type="button" data-action="open-review">查看大图</button>${refreshButton}</div>` : "") : (dimensionRepair ? `<div class="actions"><button type="button" data-action="open-review">${dimensionQueued ? "查看尺寸修复任务" : "加入尺寸修复队列"}</button>${copyButton}${refreshButton}</div>` : `<div class="actions"><button type="button" data-action="open-review">评审</button><button type="button" class="ok-button" data-action="quick-approve">OK</button>${iopaintButton}${copyButton}${refreshButton}</div>`)}
       </div>
@@ -828,6 +956,10 @@ async function saveAltText() {
     asset.alt_text = result.alt_text;
     state.altTextLastSaved = normalizeAltText(result.alt_text?.alt_text || "");
     $("#altTextStatus").textContent = state.altTextLastSaved ? "已自动保存，将随此图片一并交付" : "已清空；交付前需补充 Alt Text";
+    // Alt Text is part of the frozen delivery snapshot. Re-evaluate the whole
+    // SKU immediately so a changed delivered product moves to the correct
+    // pending-delivery focus instead of waiting for a manual page refresh.
+    if (state.mainView === "delivery") await load();
   } catch (error) {
     $("#altTextStatus").textContent = "自动保存失败；请继续编辑后重试";
     showToast(`Alt Text 自动保存失败：${error.message}`, true);
@@ -891,6 +1023,14 @@ async function refreshAsset(button, assetId, showError = true) {
   }
   try {
     const result = await api(`/api/assets/${assetId}/refresh`, { method: "POST" });
+    // Delivery membership is calculated from the whole five-image SKU and its
+    // last synced snapshot. A single-card replacement is insufficient here:
+    // reload so a refreshed image immediately enters/leaves the proper delivery
+    // focus and the SKU counts stay accurate.
+    if (state.mainView === "delivery") {
+      await load();
+      return result.removed ? null : result.asset;
+    }
     if (result.removed) {
       const index = state.assets.findIndex((item) => item.id === assetId);
       if (index >= 0) state.assets.splice(index, 1);
@@ -996,7 +1136,7 @@ async function batchCreateAndSyncDeliveries() {
   const button = $("#batchDeliveryButton");
   if (button.disabled) return;
   const confirmed = confirm(
-    "将检查当前图片目录中的全部 SKU，并仅对满足交付条件且已在商品 CSV 维护 ASIN 的 SKU 创建交付版本并同步到 A+ Tool。\n\n不满足条件的 SKU 会跳过，其他 SKU 会继续处理。是否开始？",
+    "将处理当前待交付的 SKU（首次交付、图片已调整或 Alt Text 已调整），并仅对满足交付条件且已在商品 CSV 维护 ASIN 的 SKU 创建交付版本并同步到 A+ Tool。\n\n已交付且当前版本未变化的 SKU 不会重复同步；不满足条件的 SKU 会跳过。是否开始？",
   );
   if (!confirmed) return;
   button.disabled = true;
@@ -1005,7 +1145,7 @@ async function batchCreateAndSyncDeliveries() {
     const result = await api("/api/aplus/batch-sync", { method: "POST" });
     await load();
     const lines = [
-      `检查 SKU：${result.total_skus}`,
+      `待处理 SKU：${result.total_skus}`,
       `成功同步：${result.synced.length}`,
       `跳过：${result.skipped.length}`,
       `失败：${result.failed.length}`,
@@ -1218,8 +1358,18 @@ $("#scanButton").addEventListener("click", scanNow);
 $("#batchDeliveryButton").addEventListener("click", batchCreateAndSyncDeliveries);
 $("#queueDimensionRepairsButton").addEventListener("click", queueAllDimensionRepairs);
 document.querySelectorAll("[data-delivery-mode]").forEach((button) => button.addEventListener("click", () => {
-  state.deliveryMode = button.dataset.deliveryMode;
+  const nextMode = button.dataset.deliveryMode;
+  if (!nextMode || nextMode === state.deliveryMode) return;
+  state.deliveryMode = nextMode;
   applyMainView();
+  saveViewState();
+  load();
+}));
+document.querySelectorAll("[data-delivery-focus]").forEach((button) => button.addEventListener("click", () => {
+  const nextFocus = button.dataset.deliveryFocus;
+  if (!nextFocus || nextFocus === state.deliveryFocus) return;
+  state.deliveryFocus = nextFocus;
+  renderDeliveryControls();
   saveViewState();
   load();
 }));

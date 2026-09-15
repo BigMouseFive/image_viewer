@@ -160,7 +160,7 @@ def _refresh_existing(root: Path, db, source_id: int, asset_id: int, scan_time: 
                 cursor = con.execute(
                     """UPDATE assets SET sku=?,module=?,size=?,mtime=?,mtime_ns=?,ctime_ns=?,
                        sha256=?,width=?,height=?,image_format=?,revision=?,status=?,reviewed_revision=-1,
-                       missing=0,updated_at=?
+                       missing=0,content_updated_at=?,updated_at=?
                        WHERE id=? AND source_id=? AND revision=? AND sha256=?""",
                     (
                         sku,
@@ -175,6 +175,7 @@ def _refresh_existing(root: Path, db, source_id: int, asset_id: int, scan_time: 
                         metadata["image_format"],
                         revision,
                         status,
+                        scan_time,
                         scan_time,
                         latest["id"],
                         source_id,
@@ -236,8 +237,8 @@ def _insert_new_asset(db, source_id: int, root: Path, relative_path: str, scan_t
         cursor = con.execute(
             """INSERT INTO assets(
               source_id,sku,module,relative_path,size,mtime,mtime_ns,ctime_ns,
-              sha256,width,height,image_format,discovered_at,updated_at,missing
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)""",
+              sha256,width,height,image_format,discovered_at,content_updated_at,updated_at,missing
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)""",
             (
                 source_id,
                 sku,
@@ -251,6 +252,7 @@ def _insert_new_asset(db, source_id: int, root: Path, relative_path: str, scan_t
                 metadata["width"],
                 metadata["height"],
                 metadata["image_format"],
+                scan_time,
                 scan_time,
                 scan_time,
             ),

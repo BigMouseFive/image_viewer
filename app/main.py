@@ -8,6 +8,7 @@ import uuid
 import urllib.error
 import urllib.request
 from contextlib import asynccontextmanager, suppress
+from datetime import datetime
 from pathlib import Path
 import sqlite3
 
@@ -129,18 +130,202 @@ def attach_ai_jobs(items, source_id):
     return [dict(item, ai_revision_job=latest.get(item.get("id"))) for item in items]
 
 
-def attach_delivery_eligibility(items):
+def attach_delivery_eligibility(items, source_id=None):
+    """Attach current delivery readiness and change state to each SKU asset.
+
+    ``sku_deliverable`` answers the original technical gate (all five current
+    slots can be frozen). ``delivery_required`` is narrower: it is true only
+    when that ready SKU has never been synced, or differs from its last synced
+    immutable snapshot. Keeping those concepts separate prevents hundreds of
+    unchanged historical deliveries from appearing in the pending-delivery view.
+    """
     profile = APLUS_DELIVERY_PROFILES[0]
-    alt_texts = db.alt_texts([item["id"] for item in items if item.get("id") is not None])
+    asset_ids = [item["id"] for item in items if item.get("id") is not None]
+    alt_texts = db.alt_texts(asset_ids)
+    if source_id is None:
+        source_ids = {item.get("source_id") for item in items if item.get("source_id") is not None}
+        source_id = next(iter(source_ids)) if len(source_ids) == 1 else None
+    snapshots = db.latest_synced_delivery_snapshots(source_id, profile["id"]) if source_id is not None else {}
+
     grouped = {}
     for item in items:
-        if item.get("asset_role") == "deliverable":
-            grouped.setdefault(item.get("sku"), {})[reviewer_module(item)] = item
-    deliverable_skus = {
-        sku for sku, assets_by_module in grouped.items()
-        if sku and not delivery_slots_and_errors(profile, assets_by_module, alt_texts)[1]
+        if item.get("asset_role") != "deliverable" or not item.get("sku"):
+            continue
+        # Reconciliation detects duplicates and blocks the delivery gate. Keep
+        # one representative here only for a useful pending-state explanation.
+        grouped.setdefault(item["sku"], {}).setdefault(reviewer_module(item), item)
+
+    summaries = {}
+    for sku, assets_by_module in grouped.items():
+        _, errors = delivery_slots_and_errors(profile, assets_by_module, alt_texts)
+        ready = not errors
+        snapshot = snapshots.get(sku)
+        snapshot_slots = {
+            reviewer_module(module): slot
+            for module, slot in (snapshot or {}).get("slots", {}).items()
+        }
+        image_changed_modules = []
+        metadata_changed_modules = []
+        image_change_times = []
+        metadata_change_times = []
+
+        if snapshot:
+            for definition in profile["slots"]:
+                module = definition["module"]
+                current = assets_by_module.get(module)
+                previous = snapshot_slots.get(module)
+                if not current or not previous:
+                    image_changed_modules.append(module)
+                    if current and current.get("content_updated_at"):
+                        image_change_times.append(current["content_updated_at"])
+                    continue
+                if (
+                    previous.get("asset_id") != current.get("id")
+                    or previous.get("revision") != current.get("revision")
+                    or previous.get("sha256") != current.get("sha256")
+                ):
+                    image_changed_modules.append(module)
+                    if current.get("content_updated_at"):
+                        image_change_times.append(current["content_updated_at"])
+                    continue
+                current_alt_text = str((alt_texts.get(current.get("id")) or {}).get("alt_text") or "")
+                if previous.get("alt_text", "") != current_alt_text:
+                    metadata_changed_modules.append(module)
+                    updated_at = (alt_texts.get(current.get("id")) or {}).get("updated_at")
+                    if updated_at:
+                        metadata_change_times.append(updated_at)
+        else:
+            # Initial delivery has no historical slot to compare. Sort it by
+            # its most recently created/changed image, but do not label it as a
+            # revision of a prior delivery.
+            image_change_times.extend(
+                item.get("content_updated_at")
+                for item in assets_by_module.values()
+                if item.get("content_updated_at")
+            )
+
+        if not snapshot:
+            delivery_state = "initial_delivery"
+        elif image_changed_modules:
+            delivery_state = "image_updated"
+        elif metadata_changed_modules:
+            delivery_state = "metadata_updated"
+        else:
+            delivery_state = "delivered_current"
+
+        latest_snapshot = None
+        if snapshot:
+            latest_snapshot = {
+                "id": snapshot["id"],
+                "version": snapshot["version"],
+                "created_at": snapshot["created_at"],
+            }
+        latest_image_updated_at = max(image_change_times, default=None)
+        latest_metadata_updated_at = max(metadata_change_times, default=None)
+        summaries[sku] = {
+            "state": delivery_state,
+            "ready": ready,
+            "required": ready and delivery_state != "delivered_current",
+            "blocking_reasons": errors,
+            "image_changed_modules": image_changed_modules,
+            "metadata_changed_modules": metadata_changed_modules,
+            "latest_image_updated_at": latest_image_updated_at,
+            "latest_change_at": max(
+                (value for value in (latest_image_updated_at, latest_metadata_updated_at) if value),
+                default=None,
+            ),
+            "latest_synced_delivery": latest_snapshot,
+        }
+
+    result = []
+    for item in items:
+        summary = summaries.get(item.get("sku")) if item.get("asset_role") == "deliverable" else None
+        result.append(dict(
+            item,
+            sku_deliverable=bool(summary and summary["ready"]),
+            delivery=summary,
+        ))
+    return result
+
+
+def delivery_counts(items):
+    """Count SKU-level delivery states, never individual image cards."""
+    summaries = {}
+    for item in items:
+        if item.get("asset_role") != "deliverable" or not item.get("sku"):
+            continue
+        summary = item.get("delivery")
+        if summary:
+            summaries.setdefault(item["sku"], summary)
+    values = list(summaries.values())
+    return {
+        # ``deliverable`` is the strict pending-delivery count. The change
+        # buckets intentionally include not-yet-ready SKUs so the delivery
+        # screen can still locate recently edited products for review.
+        "deliverable": sum(summary.get("required") for summary in values),
+        "image_updated": sum(summary.get("state") == "image_updated" for summary in values),
+        "image_updated_ready": sum(summary.get("required") and summary.get("state") == "image_updated" for summary in values),
+        "image_updated_pending_review": sum(summary.get("state") == "image_updated" and not summary.get("ready") for summary in values),
+        "metadata_updated": sum(summary.get("state") == "metadata_updated" for summary in values),
+        "metadata_updated_ready": sum(summary.get("required") and summary.get("state") == "metadata_updated" for summary in values),
+        "initial_delivery": sum(summary.get("required") and summary.get("state") == "initial_delivery" for summary in values),
+        "delivered": sum(summary.get("state") == "delivered_current" for summary in values),
     }
-    return [dict(item, sku_deliverable=item.get("sku") in deliverable_skus) for item in items]
+
+
+def delivery_filter_matches(item, delivery_status, delivery_focus="all"):
+    """Return whether an item belongs in a delivery-management view.
+
+    The explicit image/metadata focus is a locating tool, not a promise that
+    the SKU can be delivered immediately. This distinction lets reviewers find
+    a changed image that still needs human confirmation without weakening the
+    five-slot delivery gate used by the default ``可交付`` view.
+    """
+    summary = item.get("delivery") or {}
+    state = summary.get("state")
+    if delivery_status == "delivered":
+        return state == "delivered_current"
+    if delivery_status != "deliverable":
+        return True
+    if delivery_focus in {"image_updated", "metadata_updated"}:
+        return state == delivery_focus
+    if delivery_focus == "initial_delivery":
+        return bool(summary.get("required") and state == delivery_focus)
+    return bool(summary.get("required"))
+
+
+def _delivery_sort_timestamp(value):
+    if not value:
+        return 0.0
+    try:
+        return datetime.fromisoformat(str(value)).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def delivery_sort_key(item, delivery_status):
+    """Put recent image revisions above initial/metadata work and historic SKUs."""
+    summary = item.get("delivery") or {}
+    state = str(summary.get("state") or "")
+    if delivery_status == "deliverable":
+        priority = {"image_updated": 0, "metadata_updated": 1, "initial_delivery": 2}.get(state, 3)
+        # Image-adjusted products are explicitly sorted by image-content time,
+        # not by a later Alt Text edit on the same SKU.
+        changed_at = (
+            summary.get("latest_image_updated_at")
+            if state == "image_updated"
+            else summary.get("latest_change_at")
+        )
+    else:
+        priority = 0
+        changed_at = (summary.get("latest_synced_delivery") or {}).get("created_at")
+    return (
+        priority,
+        -_delivery_sort_timestamp(changed_at),
+        str(item.get("sku") or ""),
+        reviewer_module(item),
+        str(item.get("relative_path") or ""),
+    )
 
 
 def reviewer_module(item):
@@ -461,10 +646,10 @@ def refresh_single_asset(asset_id: int):
     except sqlite3.Error as error:
         raise HTTPException(503, "刷新数据库暂时不可用，请稍后重试") from error
 
-    all_items = apply_product_exceptions(
+    all_items = attach_delivery_eligibility(apply_product_exceptions(
         reconcile(db.assets(source["id"]), load_manifest(root)),
         db.product_exceptions(source["id"]),
-    )
+    ), source["id"])
     references = reference_images(all_items)
     item = next(
         (candidate for candidate in all_items if candidate.get("id") == asset_id),
@@ -600,7 +785,15 @@ def parse_filter_statuses(value: str, allowed: set[str], label: str) -> set[str]
 
 
 @app.get("/api/assets")
-def get_assets(status: str = "all", inventory_status: str = "all", delivery_status: str = "all", q: str = "", limit: int = 60, offset: int = 0):
+def get_assets(
+    status: str = "all",
+    inventory_status: str = "all",
+    delivery_status: str = "all",
+    delivery_focus: str = "all",
+    q: str = "",
+    limit: int = 60,
+    offset: int = 0,
+):
     review_statuses = parse_filter_statuses(status, REVIEW_STATUSES, "评审状态")
     inventory_statuses = parse_filter_statuses(inventory_status, INVENTORY_STATUSES, "清单状态")
     source, root = active()
@@ -611,20 +804,39 @@ def get_assets(status: str = "all", inventory_status: str = "all", delivery_stat
         db.product_exceptions(source["id"]),
     ), root)
     references = reference_images(all_items)
-    items = attach_delivery_eligibility(all_items)
+    items = attach_delivery_eligibility(all_items, source["id"])
+    counts = delivery_counts(items)
     if delivery_status not in {"all", "deliverable", "delivered"}:
         raise HTTPException(422, "未知交付状态")
-    if delivery_status == "deliverable":
-        items = [item for item in items if item.get("sku_deliverable")]
-    elif delivery_status == "delivered":
-        items = [item for item in items if item.get("status") == "delivered"]
-    if "all" not in inventory_statuses and "extra" not in inventory_statuses:
+    if delivery_focus not in {"all", "image_updated", "metadata_updated", "initial_delivery"}:
+        raise HTTPException(422, "未知交付聚焦条件")
+    items = [
+        item for item in items
+        if delivery_filter_matches(item, delivery_status, delivery_focus)
+    ]
+    # A focus such as “图片已调整” is a locating tool. It deliberately keeps
+    # changed SKUs whose five-image gate is not complete yet (for example,
+    # modified_pending_review), so do not let stale review/inventory filters
+    # hide the very product the user is trying to find.
+    locating_focus = delivery_status == "deliverable" and delivery_focus in {
+        "image_updated", "metadata_updated",
+    }
+    if "all" not in inventory_statuses and "extra" not in inventory_statuses and not locating_focus:
         items = [item for item in items if item.get("asset_role") != "reference"]
-    if "all" not in review_statuses:
+    if "all" not in review_statuses and not locating_focus:
         items = [item for item in items if item["status"] in review_statuses]
-    items = filter_inventory(items, inventory_statuses, q)
+    items = filter_inventory(items, {"all"} if locating_focus else inventory_statuses, q)
+    if delivery_status in {"deliverable", "delivered"}:
+        items.sort(key=lambda item: delivery_sort_key(item, delivery_status))
     items = attach_ai_jobs(attach_product_info(attach_alt_text(attach_references(items, references))), source["id"])
-    return {"items": items[offset:offset + limit], "total": len(items), "offset": offset, "limit": limit, "has_more": offset + limit < len(items)}
+    return {
+        "items": items[offset:offset + limit],
+        "total": len(items),
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + limit < len(items),
+        "delivery_counts": counts,
+    }
 
 
 AI_RESULT_STATUSES = {"completed", "needs_human_input", "failed"}
@@ -1435,10 +1647,16 @@ def batch_create_and_sync_aplus_deliveries():
         reconcile(db.assets(source["id"]), load_manifest(root)),
         db.product_exceptions(source["id"]),
     )
+    delivery_items = attach_delivery_eligibility(reconciled, source["id"])
     product_info = product_info_by_sku()
+    # Batch sync should not cycle every unchanged historical SKU into a new
+    # delivery version. Work only on initially deliverable or changed snapshots;
+    # the per-SKU creation endpoint remains the final authority for every gate.
     skus = sorted({
-        str(item["sku"]) for item in reconciled
-        if item.get("asset_role") == "deliverable" and item.get("sku")
+        str(item["sku"]) for item in delivery_items
+        if item.get("asset_role") == "deliverable"
+        and item.get("sku")
+        and (item.get("delivery") or {}).get("required")
     })
     synced = []
     skipped = []
@@ -1636,8 +1854,9 @@ def get_overview():
     review_counts = {key: sum(item.get("status") == key for item in items if item.get("asset_role") == "deliverable") for key in STATUSES}
     inventory_counts = {key: sum(item.get("inventory_status") == key for item in items) for key in INVENTORY_STATUSES if key != "all"}
     reference_count = sum(item.get("asset_role") == "reference" for item in items)
-    deliverable_items = attach_delivery_eligibility(items)
-    deliverable_skus = len({item.get("sku") for item in deliverable_items if item.get("sku_deliverable")})
+    deliverable_items = attach_delivery_eligibility(items, source["id"])
+    current_delivery_counts = delivery_counts(deliverable_items)
+    deliverable_skus = current_delivery_counts["deliverable"]
     return {
         "source": {"id": source["id"], "name": source["name"], "path": source["path"], "last_scanned_at": source.get("last_scanned_at")},
         "manifest": bool(manifest) and not current_manifest_error,
@@ -1646,7 +1865,10 @@ def get_overview():
         "total_images": sum(item.get("id") is not None and not item.get("missing") for item in items),
         "expected_images": sum(bool(item.get("expected")) for item in items), "reference_images": reference_count,
         "product_count": len({item.get("sku") for item in items if item.get("asset_role") == "deliverable" and item.get("sku")}),
-        "deliverable_skus": deliverable_skus, "review_counts": review_counts, "inventory_counts": inventory_counts,
+        "deliverable_skus": deliverable_skus,
+        "delivery_counts": current_delivery_counts,
+        "review_counts": review_counts,
+        "inventory_counts": inventory_counts,
     }
 
 
