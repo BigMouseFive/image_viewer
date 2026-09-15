@@ -42,6 +42,11 @@ button:hover { background: #edf3ff; }
 .summary-card span { color: #667085; font-size: 12px; }
 .summary-card strong { margin: 8px 0 5px; color: #101828; font-size: 20px; overflow-wrap: anywhere; }
 .summary-card small { color: #98a2b3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.summary-card.path-card { grid-column: span 2; }
+.summary-card.path-card strong { margin-top: 6px; font-size: 17px; }
+.summary-card.path-card .summary-detail { display: block; overflow: visible; color: #344054; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; white-space: normal; word-break: break-word; }
+.summary-card.path-card:hover .summary-detail { color: #101828; }
+.summary-detail[title] { cursor: help; }
 .overview-card { margin-top: 14px; padding: 18px; }
 .overview-card h3 { margin: 0 0 13px; font-size: 15px; }
 .status-summary { display: grid; grid-template-columns: repeat(6, minmax(100px, 1fr)); gap: 10px; }
@@ -228,6 +233,7 @@ h1 { font-size: 20px; margin: 0 10px 0 0; }
   .overview-actions { margin-top: 12px; }
   .overview-actions select { min-width: 0; width: 100%; }
   .summary-grid { grid-template-columns: 1fr 1fr; }
+  .summary-card.path-card { grid-column: span 2; }
   .status-summary { grid-template-columns: 1fr 1fr; }
   .list-toolbar { position: relative; top: auto; padding: 12px; }
   .filter-toolbar { flex-wrap: wrap; overflow-x: visible; align-items: flex-start; }

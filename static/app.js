@@ -302,12 +302,12 @@ async function loadOverview() {
     ? `清单错误：${summary.manifest_error}`
     : (summary.manifest ? summary.manifest_path : "未使用清单文件");
   $("#summaryGrid").innerHTML = [
-    ["当前目录", summary.source.name, summary.source.path],
-    ["参考文件", `${summary.reference_images} 张产品主图`, manifestDetail],
-    ["图片总量", `${summary.total_images} 张`, `期望 ${summary.expected_images} 张`],
-    ["产品数量", `${summary.product_count} 个 SKU`, `${summary.deliverable_skus} 个 SKU 待交付（首次或有变更）`],
-    ["最近扫描", scanned, "后台也会周期扫描文件变化"],
-  ].map(([label, value, detail]) => `<article class="summary-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small title="${escapeHtml(detail)}">${escapeHtml(detail)}</small></article>`).join("");
+    ["当前目录", summary.source.name, summary.source.path, "path-card"],
+    ["参考文件", `${summary.reference_images} 张产品主图`, manifestDetail, "path-card"],
+    ["图片总量", `${summary.total_images} 张`, `期望 ${summary.expected_images} 张`, ""],
+    ["产品数量", `${summary.product_count} 个 SKU`, `${summary.deliverable_skus} 个 SKU 待交付（首次或有变更）`, ""],
+    ["最近扫描", scanned, "后台也会周期扫描文件变化", ""],
+  ].map(([label, value, detail, className]) => `<article class="summary-card ${className}"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small class="summary-detail" title="${escapeHtml(detail)}">${escapeHtml(detail)}</small></article>`).join("");
   $("#reviewSummary").innerHTML = Object.entries(labels).filter(([key]) => key !== "all").map(([key, label]) =>
     `<div class="summary-status status-${key}"><span>${escapeHtml(label)}</span><strong>${summary.review_counts[key] || 0}</strong></div>`
   ).join("");
