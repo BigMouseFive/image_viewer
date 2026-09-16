@@ -257,12 +257,23 @@ function applyMainView(updateFilters = true) {
   $("#overviewView").hidden = state.mainView !== "overview";
   $("#assetsView").hidden = state.mainView === "overview";
   if (state.mainView === "overview") return;
-  $("#reviewFilters").hidden = state.mainView !== "review";
-  $("#inventoryFilters").hidden = state.mainView !== "review";
-  $("#deliveryFilters").hidden = state.mainView !== "delivery";
-  $("#deliveryFocusFilters").hidden = state.mainView !== "delivery" || state.deliveryMode !== "deliverable";
-  $("#batchDeliveryButton").hidden = state.mainView !== "delivery";
-  $("#queueDimensionRepairsButton").hidden = state.mainView !== "review";
+  const reviewView = state.mainView === "review";
+  const deliveryView = state.mainView === "delivery";
+  $("#reviewFilters").hidden = !reviewView;
+  $("#inventoryFilters").hidden = !reviewView;
+  $("#quickReviewFilters").hidden = !reviewView;
+  $("#filterButton").hidden = !reviewView;
+  $("#filterPopover").hidden = true;
+  $("#filterButton").setAttribute("aria-expanded", "false");
+  $("#deliveryFilters").hidden = !deliveryView;
+  $("#deliveryFocusFilters").hidden = !deliveryView || state.deliveryMode !== "deliverable";
+  $("#batchActionsWrap").hidden = !(reviewView || deliveryView);
+  $("#batchActionsMenu").hidden = true;
+  $("#batchActionsButton").setAttribute("aria-expanded", "false");
+  $("#batchDeliveryButton").hidden = !deliveryView;
+  $("#queueDimensionRepairsButton").hidden = !reviewView;
+  renderQuickReviewFilters();
+  renderActiveFilterChips();
   renderDeliveryControls();
   if (!updateFilters) return;
   if (state.mainView === "review") {
@@ -337,6 +348,8 @@ function initTabs() {
     button.addEventListener("click", () => changeStatus(key));
     tabs.appendChild(button);
   });
+  renderQuickReviewFilters();
+  renderActiveFilterChips();
 }
 
 function changeStatus(status) {
@@ -344,6 +357,83 @@ function changeStatus(status) {
   saveViewState();
   initTabs();
   load();
+}
+
+function setReviewStatus(statuses) {
+  state.status = statuses;
+  saveViewState();
+  initTabs();
+  load();
+}
+
+function quickReviewStatuses(value) {
+  if (value === "pending") return ["unreviewed", "needs_revision", "modified_pending_review"];
+  return [value];
+}
+
+function renderQuickReviewFilters() {
+  const quickFilters = $("#quickReviewFilters");
+  if (!quickFilters) return;
+  quickFilters.querySelectorAll("[data-quick-review]").forEach((button) => {
+    const values = quickReviewStatuses(button.dataset.quickReview);
+    const active = values.length === state.status.length && values.every((value) => state.status.includes(value));
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+}
+
+function renderActiveFilterChips() {
+  const chips = $("#activeFilterChips");
+  if (!chips) return;
+  chips.replaceChildren();
+  const values = [];
+  if (state.status.length && !state.status.includes("all")) {
+    state.status.forEach((value) => values.push({ group: "status", value, label: labels[value] }));
+  }
+  if (state.inventoryStatus.length && !state.inventoryStatus.includes("all")) {
+    state.inventoryStatus.forEach((value) => values.push({ group: "inventory", value, label: inventoryLabels[value] }));
+  }
+  values.forEach((item) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "filter-chip";
+    chip.textContent = `${item.label} ×`;
+    chip.title = `移除筛选：${item.label}`;
+    chip.addEventListener("click", () => {
+      if (item.group === "status") state.status = toggleFilter(state.status, item.value);
+      else state.inventoryStatus = toggleFilter(state.inventoryStatus, item.value);
+      saveViewState();
+      initTabs();
+      initInventoryTabs();
+      load();
+    });
+    chips.appendChild(chip);
+  });
+  chips.hidden = !values.length || state.mainView !== "review";
+  $("#filterButton").textContent = values.length ? `筛选 · ${values.length}` : "筛选";
+}
+
+function clearReviewFilters() {
+  state.status = ["all"];
+  state.inventoryStatus = ["all"];
+  saveViewState();
+  initTabs();
+  initInventoryTabs();
+  load();
+}
+
+function closeToolbarPopovers() {
+  $("#filterPopover").hidden = true;
+  $("#batchActionsMenu").hidden = true;
+  $("#filterButton").setAttribute("aria-expanded", "false");
+  $("#batchActionsButton").setAttribute("aria-expanded", "false");
+}
+
+function toggleToolbarPopover(button, popover) {
+  const opening = popover.hidden;
+  closeToolbarPopovers();
+  popover.hidden = !opening;
+  button.setAttribute("aria-expanded", String(opening));
 }
 
 function initInventoryTabs() {
@@ -363,6 +453,7 @@ function initInventoryTabs() {
     });
     tabs.appendChild(button);
   });
+  renderActiveFilterChips();
 }
 
 async function load(reset = true) {
@@ -1357,6 +1448,16 @@ $("#manageSourcesButton").addEventListener("click", openSources);
 $("#scanButton").addEventListener("click", scanNow);
 $("#batchDeliveryButton").addEventListener("click", batchCreateAndSyncDeliveries);
 $("#queueDimensionRepairsButton").addEventListener("click", queueAllDimensionRepairs);
+$("#filterButton").addEventListener("click", () => toggleToolbarPopover($("#filterButton"), $("#filterPopover")));
+$("#batchActionsButton").addEventListener("click", () => toggleToolbarPopover($("#batchActionsButton"), $("#batchActionsMenu")));
+$("#clearFiltersButton").addEventListener("click", clearReviewFilters);
+$("#quickReviewFilters").querySelectorAll("[data-quick-review]").forEach((button) => button.addEventListener("click", () => setReviewStatus(quickReviewStatuses(button.dataset.quickReview))));
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".toolbar-menu-wrap")) closeToolbarPopovers();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeToolbarPopovers();
+});
 document.querySelectorAll("[data-delivery-mode]").forEach((button) => button.addEventListener("click", () => {
   const nextMode = button.dataset.deliveryMode;
   if (!nextMode || nextMode === state.deliveryMode) return;

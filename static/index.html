@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>A+ 图片评审台</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=toolbar-phase1" />
   </head>
   <body>
     <header class="app-header">
@@ -36,18 +36,34 @@
 
     <section class="view-panel assets-panel" id="assetsView" hidden>
       <div class="list-toolbar">
-        <div class="filter-toolbar">
-          <div class="list-actions">
-            <button id="batchDeliveryButton" type="button" hidden>批量创建并同步 A+</button>
-            <button id="queueDimensionRepairsButton" type="button" hidden>将所有可修复尺寸异常加入队列</button>
-            <input id="search" placeholder="搜索 SKU / 模块" aria-label="搜索 SKU 或模块" />
-            <span class="stats" id="stats"></span>
+        <div class="toolbar-primary">
+          <input id="search" placeholder="搜索 SKU / 模块" aria-label="搜索 SKU 或模块" />
+          <div class="quick-review-filters" id="quickReviewFilters" aria-label="常用评审筛选">
+            <button type="button" data-quick-review="all">全部</button>
+            <button type="button" data-quick-review="pending">待处理</button>
+            <button type="button" data-quick-review="needs_revision">需修改</button>
+            <button type="button" data-quick-review="modified_pending_review">已修改</button>
           </div>
-          <div class="filter-row" id="reviewFilters"><div class="filter-label">评审状态</div><div class="tabs" id="tabs" aria-label="图片状态筛选"></div></div>
-          <div class="filter-row" id="inventoryFilters"><div class="filter-label">清单状态</div><div class="tabs inventory-tabs" id="inventoryTabs" aria-label="清单状态筛选"></div></div>
-          <div class="filter-row" id="deliveryFilters" hidden><div class="filter-label">交付视图</div><div class="tabs delivery-tabs"><button type="button" data-delivery-mode="deliverable">可交付</button><button type="button" data-delivery-mode="delivered">已交付</button></div></div>
-          <div class="filter-row" id="deliveryFocusFilters" hidden><div class="filter-label">快速定位</div><div class="tabs delivery-focus-tabs"><button type="button" data-delivery-focus="all">全部待交付</button><button type="button" data-delivery-focus="image_updated">最近图片调整</button><button type="button" data-delivery-focus="metadata_updated">Alt Text 已调整</button><button type="button" data-delivery-focus="initial_delivery">首次交付</button></div></div>
+          <div class="toolbar-menu-wrap">
+            <button id="filterButton" type="button" aria-expanded="false" aria-controls="filterPopover">筛选</button>
+            <section class="toolbar-popover filter-popover" id="filterPopover" hidden aria-label="图片筛选条件">
+              <div class="popover-heading"><strong>筛选图片</strong><button id="clearFiltersButton" type="button" class="text-button">清空筛选</button></div>
+              <div class="filter-row" id="reviewFilters"><div class="filter-label">评审状态</div><div class="tabs" id="tabs" aria-label="图片状态筛选"></div></div>
+              <div class="filter-row" id="inventoryFilters"><div class="filter-label">清单状态</div><div class="tabs inventory-tabs" id="inventoryTabs" aria-label="清单状态筛选"></div></div>
+            </section>
+          </div>
+          <div class="toolbar-menu-wrap" id="batchActionsWrap" hidden>
+            <button id="batchActionsButton" type="button" aria-expanded="false" aria-controls="batchActionsMenu">批量操作</button>
+            <div class="toolbar-popover action-menu" id="batchActionsMenu" hidden>
+              <button id="batchDeliveryButton" type="button" hidden>创建并同步 A+ 交付</button>
+              <button id="queueDimensionRepairsButton" type="button" hidden>将可修复尺寸异常加入队列</button>
+            </div>
+          </div>
+          <span class="stats" id="stats"></span>
         </div>
+        <div class="active-filter-chips" id="activeFilterChips" hidden aria-label="当前筛选条件"></div>
+        <div class="delivery-toolbar-row" id="deliveryFilters" hidden><div class="filter-label">交付视图</div><div class="tabs delivery-tabs"><button type="button" data-delivery-mode="deliverable">可交付</button><button type="button" data-delivery-mode="delivered">已交付</button></div></div>
+        <div class="delivery-toolbar-row" id="deliveryFocusFilters" hidden><div class="filter-label">快速定位</div><div class="tabs delivery-focus-tabs"><button type="button" data-delivery-focus="all">全部待交付</button><button type="button" data-delivery-focus="image_updated">最近图片调整</button><button type="button" data-delivery-focus="metadata_updated">Alt Text 已调整</button><button type="button" data-delivery-focus="initial_delivery">首次交付</button></div></div>
       </div>
       <main class="groups" id="groups"></main>
       <div id="loadMoreSentinel" aria-hidden="true"></div>
@@ -144,6 +160,6 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-    <script src="/static/app.js" defer></script>
+    <script src="/static/app.js?v=toolbar-phase1" defer></script>
   </body>
 </html>

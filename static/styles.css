@@ -29,7 +29,7 @@ button:hover { background: #edf3ff; }
 .main-tabs button.active { color: #175cd3; background: #eff4ff; }
 .main-tabs button.active::after { content: ""; position: absolute; top: 9px; right: 0; bottom: 9px; left: 0; width: 3px; border-radius: 0 3px 3px 0; background: #397bc0; }
 .view-panel { margin-left: 224px; }
-.view-panel[hidden], .filter-row[hidden], button[hidden] { display: none !important; }
+.view-panel[hidden], .filter-row[hidden], .delivery-toolbar-row[hidden], .toolbar-menu-wrap[hidden], .active-filter-chips[hidden], button[hidden] { display: none !important; }
 .overview-panel { max-width: 1360px; margin: 0 auto 0 224px; padding: 28px; }
 .overview-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
 .overview-heading h2 { margin: 0; font-size: 22px; }
@@ -58,13 +58,35 @@ button:hover { background: #edf3ff; }
 .summary-status.status-approved, .summary-status.inventory-present { color: #087443; background: #d9f8e8; }
 .summary-status.status-delivered { color: #245b91; background: #e3edff; }
 .summary-status.inventory-product_exception { color: #9d174d; background: #fce7f3; }
-.list-toolbar { position: sticky; top: 0; z-index: 2; padding: 10px 24px; border-bottom: 1px solid #dbe2ea; background: #fff; }
-.filter-toolbar { display: flex; align-items: center; gap: 12px; overflow-x: auto; scrollbar-width: thin; }
-.list-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
-.list-actions input { width: min(250px, 22vw); }
-.filter-row { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
-.filter-row .filter-label { white-space: nowrap; }
-.filter-row .tabs { flex-wrap: nowrap; }
+.list-toolbar { position: sticky; top: 0; z-index: 2; padding: 10px 24px; border-bottom: 1px solid #dbe2ea; background: #fff; box-shadow: 0 2px 8px #10182808; }
+.toolbar-primary { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.toolbar-primary > input { width: clamp(180px, 20vw, 280px); min-width: 0; }
+.quick-review-filters { display: flex; flex: 0 1 auto; gap: 4px; min-width: 0; }
+.quick-review-filters:not([hidden]) { display: flex; }
+.quick-review-filters button { padding: 5px 8px; border-color: transparent; color: #475467; background: #f2f4f7; font-size: 12px; white-space: nowrap; }
+.quick-review-filters button[data-quick-review="needs_revision"] { color: #b42318; background: #ffe4e4; }
+.quick-review-filters button[data-quick-review="modified_pending_review"] { color: #9a6700; background: #fff1c7; }
+.quick-review-filters button.active { color: #fff; background: #175cd3; box-shadow: inset 0 0 0 1px #175cd3; font-weight: 700; }
+.toolbar-menu-wrap { position: relative; flex: 0 0 auto; }
+.toolbar-menu-wrap > button { white-space: nowrap; font-size: 12px; }
+.toolbar-menu-wrap > button[aria-expanded="true"] { color: #175cd3; border-color: #84adf4; background: #eff4ff; }
+.toolbar-popover { position: absolute; top: calc(100% + 8px); right: 0; z-index: 5; width: min(680px, calc(100vw - 280px)); padding: 12px; border: 1px solid #d0d5dd; border-radius: 10px; background: #fff; box-shadow: 0 12px 28px #10182824; }
+.toolbar-popover[hidden] { display: none; }
+.filter-popover { display: grid; gap: 12px; }
+.popover-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #101828; font-size: 13px; }
+.text-button { padding: 3px 4px; border-color: transparent; color: #175cd3; background: transparent; font-size: 12px; }
+.text-button:hover { background: #eff4ff; }
+.filter-row { display: grid; gap: 6px; }
+.filter-row .filter-label { color: #667085; font-size: 11px; font-weight: 700; }
+.filter-row .tabs { align-items: flex-start; }
+.action-menu { display: grid; min-width: 240px; padding: 6px; }
+.action-menu button { width: 100%; border-color: transparent; border-radius: 6px; padding: 8px 9px; text-align: left; font-size: 12px; }
+.action-menu button:hover { background: #eff4ff; }
+.active-filter-chips { display: flex; gap: 6px; margin-top: 8px; overflow: hidden; }
+.filter-chip { flex: 0 0 auto; padding: 3px 7px; border-color: #b8c2cf; color: #475467; background: #f8fafc; font-size: 11px; white-space: nowrap; }
+.filter-chip:hover { color: #b42318; border-color: #f2a7a7; background: #fff1f1; }
+.delivery-toolbar-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.delivery-toolbar-row .filter-label { flex: 0 0 auto; color: #667085; font-size: 11px; font-weight: 700; }
 
 h1 { font-size: 20px; margin: 0 10px 0 0; }
 
@@ -113,7 +135,7 @@ h1 { font-size: 20px; margin: 0 10px 0 0; }
 .tabs button.status-delivered.active { background: #397bc0; color: #fff; }
 
 
-.stats { margin-left: auto; color: #667085; font-size: 13px; }
+.stats { margin-left: auto; min-width: 0; overflow: hidden; color: #667085; font-size: 13px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 
 .groups { max-width: 1760px; margin: 0 auto; padding: 20px 28px 42px; }
 .group { margin-bottom: 34px; }
@@ -236,11 +258,13 @@ h1 { font-size: 20px; margin: 0 10px 0 0; }
   .summary-card.path-card { grid-column: span 2; }
   .status-summary { grid-template-columns: 1fr 1fr; }
   .list-toolbar { position: relative; top: auto; padding: 12px; }
-  .filter-toolbar { flex-wrap: wrap; overflow-x: visible; align-items: flex-start; }
-  .list-actions { flex: 1 1 100%; flex-wrap: wrap; }
-  .list-actions input { width: auto; flex: 1 1 160px; }
-  .filter-row { align-items: flex-start; flex-wrap: wrap; }
-  .filter-row .filter-label { padding-top: 6px; }
+  .toolbar-primary { flex-wrap: wrap; align-items: flex-start; }
+  .toolbar-primary > input { flex: 1 1 180px; width: auto; }
+  .quick-review-filters { order: 3; width: 100%; overflow-x: auto; padding-bottom: 2px; }
+  .toolbar-popover { position: fixed; top: auto; right: 12px; left: 12px; bottom: 12px; width: auto; max-height: min(70vh, 620px); overflow: auto; }
+  .filter-row .tabs { flex-wrap: wrap; }
+  .stats { max-width: 100%; margin-left: 0; }
+  .delivery-toolbar-row { align-items: flex-start; flex-wrap: wrap; }
   .groups { padding: 14px 12px 30px; }
   .group h2 { flex-wrap: wrap; }
   .delivery-summary { order: 4; flex-basis: 100%; }
