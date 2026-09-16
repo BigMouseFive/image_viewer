@@ -70,16 +70,16 @@ button:hover { background: #edf3ff; }
 .toolbar-menu-wrap { position: relative; flex: 0 0 auto; }
 .toolbar-menu-wrap > button { white-space: nowrap; font-size: 12px; }
 .toolbar-menu-wrap > button[aria-expanded="true"] { color: #175cd3; border-color: #84adf4; background: #eff4ff; }
-.toolbar-popover { position: absolute; top: calc(100% + 8px); right: 0; z-index: 5; width: min(680px, calc(100vw - 280px)); max-width: calc(100vw - 248px); padding: 12px; border: 1px solid #d0d5dd; border-radius: 10px; background: #fff; box-shadow: 0 12px 28px #10182824; }
+.toolbar-popover { position: fixed; z-index: 5; width: min(680px, calc(100vw - 280px)); max-width: calc(100vw - 248px); padding: 12px; border: 1px solid #d0d5dd; border-radius: 10px; background: #fff; box-shadow: 0 12px 28px #10182824; }
 .toolbar-popover[hidden] { display: none; }
-.filter-popover { position: fixed; top: 54px; right: auto; left: max(240px, calc(100vw - 704px)); width: min(680px, calc(100vw - 264px)); max-width: none; box-sizing: border-box; display: grid; gap: 12px; }
+.filter-popover { display: grid; gap: 12px; }
 .popover-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #101828; font-size: 13px; }
 .text-button { padding: 3px 4px; border-color: transparent; color: #175cd3; background: transparent; font-size: 12px; }
 .text-button:hover { background: #eff4ff; }
 .filter-row { display: grid; gap: 6px; }
 .filter-row .filter-label { color: #667085; font-size: 11px; font-weight: 700; }
 .filter-row .tabs { align-items: flex-start; }
-.action-menu { position: fixed; top: 54px; right: 24px; left: auto; width: min(280px, calc(100vw - 264px)); max-width: none; box-sizing: border-box; display: grid; min-width: 0; padding: 6px; }
+.action-menu { width: min(280px, calc(100vw - 264px)); box-sizing: border-box; display: grid; min-width: 0; padding: 6px; }
 .action-menu button { width: 100%; border-color: transparent; border-radius: 6px; padding: 8px 9px; text-align: left; font-size: 12px; }
 .action-menu button:hover { background: #eff4ff; }
 .active-filter-chips { display: flex; gap: 6px; margin-top: 8px; overflow: hidden; }

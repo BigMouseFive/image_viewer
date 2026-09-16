@@ -423,17 +423,39 @@ function clearReviewFilters() {
 }
 
 function closeToolbarPopovers() {
-  $("#filterPopover").hidden = true;
-  $("#batchActionsMenu").hidden = true;
+  [$("#filterPopover"), $("#batchActionsMenu")].forEach((popover) => {
+    popover.hidden = true;
+    popover.style.removeProperty("left");
+    popover.style.removeProperty("right");
+    popover.style.removeProperty("top");
+  });
   $("#filterButton").setAttribute("aria-expanded", "false");
   $("#batchActionsButton").setAttribute("aria-expanded", "false");
+}
+
+function positionToolbarPopover(button, popover) {
+  const compactViewport = window.matchMedia("(max-width: 720px)").matches;
+  if (compactViewport) return;
+  const trigger = button.getBoundingClientRect();
+  const panel = popover.getBoundingClientRect();
+  const minLeft = 240;
+  const maxRight = window.innerWidth - 24;
+  const panelWidth = Math.min(panel.width, maxRight - minLeft);
+  // Prefer right alignment so menus visually belong to their trigger. Clamp
+  // only when that would put content under the fixed left navigation.
+  const left = Math.min(Math.max(trigger.right - panelWidth, minLeft), maxRight - panelWidth);
+  popover.style.left = `${Math.round(left)}px`;
+  popover.style.right = "auto";
+  popover.style.top = `${Math.round(trigger.bottom + 8)}px`;
 }
 
 function toggleToolbarPopover(button, popover) {
   const opening = popover.hidden;
   closeToolbarPopovers();
-  popover.hidden = !opening;
-  button.setAttribute("aria-expanded", String(opening));
+  if (!opening) return;
+  popover.hidden = false;
+  positionToolbarPopover(button, popover);
+  button.setAttribute("aria-expanded", "true");
 }
 
 function initInventoryTabs() {
