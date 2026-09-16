@@ -79,7 +79,7 @@ button:hover { background: #edf3ff; }
 .filter-row { display: grid; gap: 6px; }
 .filter-row .filter-label { color: #667085; font-size: 11px; font-weight: 700; }
 .filter-row .tabs { align-items: flex-start; }
-.action-menu { display: grid; min-width: 240px; padding: 6px; }
+.action-menu { position: fixed; top: 54px; right: 24px; left: auto; width: min(280px, calc(100vw - 264px)); max-width: none; box-sizing: border-box; display: grid; min-width: 0; padding: 6px; }
 .action-menu button { width: 100%; border-color: transparent; border-radius: 6px; padding: 8px 9px; text-align: left; font-size: 12px; }
 .action-menu button:hover { background: #eff4ff; }
 .active-filter-chips { display: flex; gap: 6px; margin-top: 8px; overflow: hidden; }
