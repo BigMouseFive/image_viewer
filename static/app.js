@@ -1453,7 +1453,14 @@ $("#batchActionsButton").addEventListener("click", () => toggleToolbarPopover($(
 $("#clearFiltersButton").addEventListener("click", clearReviewFilters);
 $("#quickReviewFilters").querySelectorAll("[data-quick-review]").forEach((button) => button.addEventListener("click", () => setReviewStatus(quickReviewStatuses(button.dataset.quickReview))));
 document.addEventListener("click", (event) => {
-  if (!event.target.closest(".toolbar-menu-wrap")) closeToolbarPopovers();
+  // Selecting a filter rebuilds its button list before this click bubbles to
+  // document. `event.target.closest()` would then see a detached button and
+  // incorrectly treat the selection as an outside click. The dispatch path is
+  // stable for the entire event, so it preserves multi-select interaction.
+  const insideToolbarMenu = event.composedPath().some(
+    (node) => node instanceof Element && node.classList.contains("toolbar-menu-wrap"),
+  );
+  if (!insideToolbarMenu) closeToolbarPopovers();
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeToolbarPopovers();
