@@ -14,11 +14,14 @@ chmod +x install-macos.sh
 ./install-macos.sh
 ```
 
-The installer creates `.venv`, installs dependencies, registers the Web LaunchAgent, and starts it. The default configuration listens only on:
+The installer creates `.venv`, installs dependencies, registers the Web LaunchAgent, and starts it. By default the reviewer listens on all local network interfaces, so it is available from this machine and trusted LAN devices:
 
 ```text
 http://127.0.0.1:8700/
+http://<本机局域网-IP>:8700/
 ```
+
+The installer prints the detected LAN URL after startup. This is a trusted-private-network default: the reviewer currently has no login/authentication layer, including for external-AI result submission. Do **not** expose port `8700` to the public internet or use port forwarding. To return to local-only access, set `server.host: 127.0.0.1` and restart the service.
 
 Useful commands:
 
@@ -49,8 +52,10 @@ After a code or configuration change, restart the LaunchAgent:
 
 ```yaml
 server:
-  host: 127.0.0.1
+  host: 0.0.0.0
   port: 8700
+  # Optional stable LAN URL used in generated external-AI task URLs.
+  # public_url: http://192.168.1.20:8700
 images:
   allowed_root_dir: ..
   default_source:
@@ -63,8 +68,8 @@ aplus_prompts:
   csv: ../ai-relay/outputs/aplus_prompts_20260903.csv
 ```
 
-- `server.host`: default `127.0.0.1`. The external AI write API has no token in this personal workflow, so keep it loopback-only unless you deliberately add network controls.
-- `server.public_url`: optional URL used in generated task/download URLs. Set it only if a trusted external process genuinely needs to reach the reviewer.
+- `server.host`: default `0.0.0.0`, which listens on all local interfaces and supports trusted LAN access. The external AI write API has no token, so never expose this port to the public internet; set it to `127.0.0.1` to make the service local-only again.
+- `server.public_url`: optional stable LAN URL used in generated external-AI task/download URLs, for example `http://192.168.1.20:8700`. When omitted, local browsing still works through the machine's LAN IP; external tooling should explicitly set `IMAGE_REVIEWER_URL`.
 - `images.allowed_root_dir`: upper bound for directories selectable through the UI. Set the smallest practical scope.
 - `images.default_source`: initial A+ image directory when the database has no source.
 - `images.scan_interval_seconds`: background scan interval.

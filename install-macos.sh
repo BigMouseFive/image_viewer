@@ -40,6 +40,18 @@ config_port() {
 }
 PORT="$(config_port)"
 
+lan_ipv4() {
+  local ip
+  for interface in en0 en1; do
+    ip="$(ipconfig getifaddr "$interface" 2>/dev/null || true)"
+    if [[ -n "$ip" ]]; then
+      printf '%s' "$ip"
+      return
+    fi
+  done
+  return 1
+}
+
 config_ai_revision_enabled() {
   awk '
     /^ai_revision:[[:space:]]*$/ { enabled_section=1; next }
@@ -254,13 +266,24 @@ if [[ -z "$READY" ]]; then
   exit 1
 fi
 
+LAN_IP="$(lan_ipv4 || true)"
 log "✅ image-reviewer 已启动：http://127.0.0.1:$PORT/"
 cat <<EOF
 
-默认仅本机访问：
+本机访问：
   http://127.0.0.1:$PORT/
+EOF
+if [[ -n "$LAN_IP" ]]; then
+  cat <<EOF
+可信局域网访问：
+  http://$LAN_IP:$PORT/
+EOF
+else
+  warn "未检测到 Wi-Fi/以太网 IPv4；连接局域网后可执行：ipconfig getifaddr en0"
+fi
+cat <<EOF
 
-如需局域网访问，请先设置 server.host/public_url，并在可信网络、认证和 TLS 保护下使用。
+安全提示：服务默认监听局域网，当前评审与外部 AI API 未设置登录认证。仅在可信私有网络使用；不要端口映射或暴露到公网。不需要局域网访问时，将 config.yaml 的 server.host 改回 127.0.0.1 后重启。
 
 常用命令：
   查看状态  $PROJECT_DIR/install-macos.sh status
