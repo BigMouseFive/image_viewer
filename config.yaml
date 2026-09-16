@@ -33,18 +33,3 @@ product_info:
 aplus_prompts:
   # 原始生图提示词；AI 修改任务接口按 SKU + A+L01~A+L05 返回对应 prompt。
   csv: ../ai-relay/outputs/aplus_prompts_20260903.csv
-
-ai_revision:
-  # 前端 Cursor ACP 入口已移除；外部 AI 通过 /api/ai/revision-tasks 和本项目 Skill 工作。
-  # 如确实需要恢复旧的本地 Worker，可手动设为 true。
-  enabled: false
-  runner: cursor_acp
-  agent_command: agent
-  # Cursor ACP 当前实际返回 auto-smart[optimize_for=balanced]（界面名称 Auto Balance）。
-  model_policy: auto
-  max_concurrency: 1
-  max_attempts: 2
-  task_timeout_seconds: 1200
-  poll_interval_seconds: 3
-  auto_apply: true
-  workspace_root: data/ai-jobs

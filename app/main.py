@@ -41,7 +41,7 @@ from .inventory import (
 )
 from .iopaint import IOPaintError, backup_asset, inspect_editable_image, resolve_editable_asset, set_iopaint_input
 from .locks import asset_lock
-from .ai_revision.service import ACTIVE_STATUSES as AI_ACTIVE_STATUSES, instructions_hash
+
 from .ai_integration.service import (
     AIIntegrationError,
     apply_external_result,
@@ -121,13 +121,6 @@ def attach_product_info(items):
     info = product_info_by_sku()
     return [dict(item, product_info=info.get(item.get("sku"))) for item in items]
 
-
-def attach_ai_jobs(items, source_id):
-    jobs = db.ai_jobs(source_id, limit=2_000)
-    latest = {}
-    for job in jobs:
-        latest.setdefault(job["asset_id"], job)
-    return [dict(item, ai_revision_job=latest.get(item.get("id"))) for item in items]
 
 
 def attach_delivery_eligibility(items, source_id=None):
@@ -396,10 +389,6 @@ def external_ai_base_url():
     return str(server.get("public_url") or f"http://127.0.0.1:{server.get('port', 8700)}").rstrip("/")
 
 
-def legacy_ai_revision_enabled() -> bool:
-    """Whether the retired in-app Cursor ACP queue is explicitly re-enabled."""
-    return bool(config.get("ai_revision", {}).get("enabled", False))
-
 
 def safe_dir(path):
     candidate = Path(path).expanduser().resolve()
@@ -539,9 +528,6 @@ class AltTextUpdate(BaseModel):
     alt_text: str = Field(min_length=1, max_length=100)
     revision: int = Field(ge=0)
 
-
-class AIRevisionBatch(BaseModel):
-    asset_ids: list[int] = Field(min_length=1, max_length=20)
 
 
 class DimensionRepairQueue(BaseModel):
@@ -828,7 +814,7 @@ def get_assets(
     items = filter_inventory(items, {"all"} if locating_focus else inventory_statuses, q)
     if delivery_status in {"deliverable", "delivered"}:
         items.sort(key=lambda item: delivery_sort_key(item, delivery_status))
-    items = attach_ai_jobs(attach_product_info(attach_alt_text(attach_references(items, references))), source["id"])
+    items = attach_product_info(attach_alt_text(attach_references(items, references)))
     return {
         "items": items[offset:offset + limit],
         "total": len(items),
@@ -1459,127 +1445,6 @@ def list_external_ai_revision_results(asset_id: int | None = None, task_id: str 
             raise HTTPException(404, "AI 修改任务不存在")
     return db.ai_revision_results(asset_id, source["id"], task_id, max(1, min(limit, 500)))
 
-
-@app.post("/api/assets/{asset_id}/ai-revision-jobs")
-def create_ai_revision_job(asset_id: int):
-    if not legacy_ai_revision_enabled():
-        raise HTTPException(410, "旧 Cursor ACP 工作流已禁用；请使用外部 AI 修图 API 和 aplus-image-revision Skill")
-    source, root = active()
-    manifest = load_manifest(root)
-    reconciled = apply_product_exceptions(
-        reconcile(db.assets(source["id"]), manifest),
-        db.product_exceptions(source["id"]),
-    )
-    asset = next((item for item in reconciled if item.get("id") == asset_id), None)
-    if not asset:
-        raise HTTPException(404, "图片不存在")
-    if asset.get("asset_role") != "deliverable" or asset.get("inventory_status") != "present":
-        raise HTTPException(422, "只有清单内正常图片可以交给 AI 修改")
-    if asset["status"] != "needs_revision":
-        raise HTTPException(422, "只有评审状态为“需修改”的图片可以创建 AI 任务")
-    comments = str(asset["comments"])
-    sku = str(asset["sku"])
-    instructions = [line.strip() for line in comments.splitlines() if line.strip()]
-    if not instructions:
-        raise HTTPException(422, "请先填写修改意见")
-    references = reference_images(reconciled).get(sku, [])
-    reference = next((item for item in references if item.get("relative_path")), None)
-    if not reference:
-        raise HTTPException(422, "未找到同 SKU 产品主图，无法自动核对产品")
-    job, created = db.create_ai_job(
-        source["id"], asset, reference["relative_path"], instructions, instructions_hash(comments),
-    )
-    return {"job": job, "created": created}
-
-
-@app.post("/api/ai-revision-jobs/batch")
-def create_ai_revision_jobs_batch(body: AIRevisionBatch):
-    if not legacy_ai_revision_enabled():
-        raise HTTPException(410, "旧 Cursor ACP 工作流已禁用；请使用外部 AI 修图 API 和 aplus-image-revision Skill")
-    source, root = active()
-    reconciled = apply_product_exceptions(
-        reconcile(db.assets(source["id"]), load_manifest(root)),
-        db.product_exceptions(source["id"]),
-    )
-    requested_ids = set(body.asset_ids)
-    assets = {int(item["id"]): item for item in reconciled if item.get("id") is not None and int(item["id"]) in requested_ids}
-    references = reference_images(reconciled)
-    created_jobs = []
-    existing_jobs = []
-    skipped = []
-    for asset_id in dict.fromkeys(body.asset_ids):
-        asset = assets.get(asset_id)
-        reason = ""
-        if not asset:
-            reason = "图片不存在"
-        elif asset.get("asset_role") != "deliverable" or asset.get("inventory_status") != "present":
-            reason = "不是清单内正常图片"
-        elif asset.get("status") != "needs_revision":
-            reason = "不是需修改状态"
-        else:
-            comments = str(asset.get("comments") or "")
-            instructions = [line.strip() for line in comments.splitlines() if line.strip()]
-            reference = next((item for item in references.get(str(asset.get("sku")), []) if item.get("relative_path")), None)
-            if not instructions:
-                reason = "未填写修改意见"
-            elif not reference:
-                reason = "缺少产品主图"
-            else:
-                job, created = db.create_ai_job(
-                    source["id"], asset, reference["relative_path"], instructions, instructions_hash(comments),
-                )
-                (created_jobs if created else existing_jobs).append(job)
-        if reason:
-            skipped.append({"asset_id": asset_id, "reason": reason})
-    return {"created": created_jobs, "existing": existing_jobs, "skipped": skipped}
-
-
-@app.get("/api/ai-revision-jobs")
-def list_ai_revision_jobs(status: str = "all", limit: int = 100):
-    source, _ = active()
-    allowed = {"all", "queued", "preparing", "running", "validating", "applying", "completed", "failed", "stale", "cancelled"}
-    statuses = parse_filter_statuses(status, allowed, "AI 任务状态")
-    return db.ai_jobs(source["id"], None if "all" in statuses else statuses, max(1, min(limit, 500)))
-
-
-@app.get("/api/ai-revision-jobs/{job_id}")
-def get_ai_revision_job(job_id: int):
-    source, _ = active()
-    job = db.ai_job(job_id)
-    if not job or job["source_id"] != source["id"]:
-        raise HTTPException(404, "AI 任务不存在")
-    return job
-
-
-@app.post("/api/ai-revision-jobs/{job_id}/cancel")
-def cancel_ai_revision_job(job_id: int):
-    source, _ = active()
-    job = db.ai_job(job_id)
-    if not job or job["source_id"] != source["id"]:
-        raise HTTPException(404, "AI 任务不存在")
-    if job["status"] not in AI_ACTIVE_STATUSES:
-        raise HTTPException(409, "该任务当前无法取消")
-    return db.update_ai_job(job_id, "cancelled", cancelled=True)
-
-
-@app.post("/api/ai-revision-jobs/{job_id}/retry")
-def retry_ai_revision_job(job_id: int):
-    if not legacy_ai_revision_enabled():
-        raise HTTPException(410, "旧 Cursor ACP 工作流已禁用；请使用外部 AI 修图 API 和 aplus-image-revision Skill")
-    source, _ = active()
-    job = db.ai_job(job_id)
-    if not job or job["source_id"] != source["id"]:
-        raise HTTPException(404, "AI 任务不存在")
-    if job["status"] not in {"failed", "stale", "cancelled"}:
-        raise HTTPException(409, "只有失败、过期或取消的任务可以重试")
-    asset = db.asset(job["asset_id"], source["id"])
-    if not asset or asset["status"] != "needs_revision":
-        raise HTTPException(409, "图片已不再处于需修改状态")
-    instructions = [line.strip() for line in asset["comments"].splitlines() if line.strip()]
-    new_job, created = db.create_ai_job(
-        source["id"], asset, job["reference_path"], instructions, instructions_hash(asset["comments"]),
-    )
-    return {"job": new_job, "created": created}
 
 
 @app.put("/api/assets/{asset_id}/alt-text")

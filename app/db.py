@@ -107,20 +107,7 @@ class Database:
               alt_text TEXT NOT NULL, FOREIGN KEY(delivery_id) REFERENCES aplus_deliveries(id),
               UNIQUE(delivery_id, sequence)
             );
-            CREATE TABLE IF NOT EXISTS ai_revision_jobs (
-              id INTEGER PRIMARY KEY, source_id INTEGER NOT NULL, asset_id INTEGER NOT NULL,
-              sku TEXT NOT NULL, module TEXT NOT NULL, relative_path TEXT NOT NULL, reference_path TEXT NOT NULL,
-              source_revision INTEGER NOT NULL, source_sha256 TEXT NOT NULL,
-              instructions_json TEXT NOT NULL, instructions_hash TEXT NOT NULL,
-              status TEXT NOT NULL DEFAULT 'queued', attempt INTEGER NOT NULL DEFAULT 0,
-              model_policy TEXT NOT NULL DEFAULT 'auto', resolved_model TEXT NOT NULL DEFAULT '',
-              cursor_session_id TEXT NOT NULL DEFAULT '', workspace_path TEXT NOT NULL DEFAULT '',
-              candidate_path TEXT NOT NULL DEFAULT '', candidate_sha256 TEXT NOT NULL DEFAULT '',
-              result_summary TEXT NOT NULL DEFAULT '', result_json TEXT NOT NULL DEFAULT '',
-              error_message TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, started_at TEXT,
-              completed_at TEXT, cancelled_at TEXT,
-              FOREIGN KEY(source_id) REFERENCES image_sources(id), FOREIGN KEY(asset_id) REFERENCES assets(id)
-            );
+
             CREATE TABLE IF NOT EXISTS ai_revision_results (
               id INTEGER PRIMARY KEY, task_id TEXT NOT NULL, source_id INTEGER NOT NULL, asset_id INTEGER NOT NULL,
               source_revision INTEGER NOT NULL, result_revision INTEGER, source_sha256 TEXT NOT NULL,
@@ -204,7 +191,7 @@ class Database:
                            WHERE content_updated_at IS NULL OR content_updated_at=''""", (now(),))
             con.execute("CREATE INDEX IF NOT EXISTS idx_assets_source_order ON assets(source_id, sku, module, relative_path)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_assets_source_status_order ON assets(source_id, status, sku, module, relative_path)")
-            con.execute("CREATE INDEX IF NOT EXISTS idx_ai_jobs_status_order ON ai_revision_jobs(status, created_at, id)")
+
             for table, column, definition in (
                 ("ai_revision_results", "instructions_hash", "TEXT NOT NULL DEFAULT ''"),
                 ("ai_revision_results", "instructions_json", "TEXT NOT NULL DEFAULT '[]'"),
@@ -238,9 +225,7 @@ class Database:
             con.execute("DROP INDEX IF EXISTS idx_external_ai_tasks_snapshot")
             con.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_external_ai_tasks_snapshot
                            ON external_ai_tasks(source_id, asset_id, source_revision, instructions_hash, context_hash)""")
-            con.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_jobs_active_asset_revision
-                           ON ai_revision_jobs(source_id, asset_id, source_revision)
-                           WHERE status IN ('queued','preparing','running','validating','applying')""")
+
 
     def migrate_legacy(self, source_id):
         with self.connect() as con:
@@ -549,73 +534,6 @@ class Database:
         rows = self.assets(source_id, "needs_revision")
         return [{"source_id": source_id, "sku": r["sku"], "module": r["module"], "image_path": r["relative_path"], "revision": r["revision"], "instructions": [x for x in r["comments"].split("\n") if x.strip()]} for r in rows]
 
-    def create_ai_job(self, source_id, asset, reference_path, instructions, instructions_hash):
-        timestamp = now()
-        payload = json.dumps(instructions, ensure_ascii=False)
-        with self.connect() as con:
-            existing = con.execute(
-                """SELECT * FROM ai_revision_jobs WHERE source_id=? AND asset_id=? AND source_revision=?
-                   AND status IN ('queued','preparing','running','validating','applying') ORDER BY id DESC LIMIT 1""",
-                (source_id, asset["id"], asset["revision"]),
-            ).fetchone()
-            if existing:
-                return dict(existing), False
-            cursor = con.execute(
-                """INSERT INTO ai_revision_jobs(
-                   source_id,asset_id,sku,module,relative_path,reference_path,source_revision,source_sha256,
-                   instructions_json,instructions_hash,status,created_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,'queued',?)""",
-                (source_id, asset["id"], asset["sku"], asset["module"], asset["relative_path"], reference_path,
-                 asset["revision"], asset["sha256"], payload, instructions_hash, timestamp),
-            )
-            row = con.execute("SELECT * FROM ai_revision_jobs WHERE id=?", (cursor.lastrowid,)).fetchone()
-            return dict(row), True
-
-    def ai_job(self, job_id):
-        with self.connect() as con:
-            row = con.execute("SELECT * FROM ai_revision_jobs WHERE id=?", (job_id,)).fetchone()
-            return dict(row) if row else None
-
-    def ai_jobs(self, source_id=None, statuses=None, limit=100):
-        sql = "SELECT * FROM ai_revision_jobs WHERE 1=1"
-        args = []
-        if source_id is not None:
-            sql += " AND source_id=?"; args.append(source_id)
-        if statuses:
-            placeholders = ",".join("?" for _ in statuses)
-            sql += f" AND status IN ({placeholders})"; args.extend(statuses)
-        sql += " ORDER BY created_at DESC,id DESC LIMIT ?"; args.append(limit)
-        with self.connect() as con:
-            return [dict(row) for row in con.execute(sql, args)]
-
-    def claim_ai_job(self):
-        with self.connect() as con:
-            con.execute("BEGIN IMMEDIATE")
-            row = con.execute("SELECT * FROM ai_revision_jobs WHERE status='queued' ORDER BY created_at,id LIMIT 1").fetchone()
-            if not row:
-                return None
-            cursor = con.execute(
-                "UPDATE ai_revision_jobs SET status='preparing',attempt=attempt+1,started_at=?,error_message='' WHERE id=? AND status='queued'",
-                (now(), row["id"]),
-            )
-            if not cursor.rowcount:
-                return None
-            return dict(con.execute("SELECT * FROM ai_revision_jobs WHERE id=?", (row["id"],)).fetchone())
-
-    def update_ai_job(self, job_id, status, completed=False, cancelled=False, **fields):
-        allowed = {"workspace_path", "candidate_path", "candidate_sha256", "resolved_model", "cursor_session_id", "result_summary", "result_json", "error_message"}
-        values = {key: value for key, value in fields.items() if key in allowed}
-        values["status"] = status
-        if completed:
-            values["completed_at"] = now()
-        if cancelled:
-            values["cancelled_at"] = now()
-        assignments = ",".join(f"{key}=?" for key in values)
-        with self.connect() as con:
-            cursor = con.execute(f"UPDATE ai_revision_jobs SET {assignments} WHERE id=?", [*values.values(), job_id])
-            if not cursor.rowcount:
-                raise KeyError(job_id)
-            return dict(con.execute("SELECT * FROM ai_revision_jobs WHERE id=?", (job_id,)).fetchone())
 
     def create_or_get_external_task(
         self,

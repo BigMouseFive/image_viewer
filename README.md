@@ -76,16 +76,9 @@ aplus_prompts:
 - `product_info.csv`: supplies product title, bullets, and ASIN context.
 - `aplus_prompts.csv`: supplies the original A+L01–A+L05 prompt/headline/body context for external revision tasks.
 
-### Retired in-app Cursor ACP worker
+### External AI revision only
 
-The old web UI entries (`交给 AI 修改`, `AI 处理当前结果`, `AI 任务`) were removed because that background workflow was too slow/unstable. It is disabled by default:
-
-```yaml
-ai_revision:
-  enabled: false
-```
-
-The supported workflow is the external API plus the project Skill documented below. The old worker code remains only as an explicitly opt-in compatibility path; when disabled, its job-creation APIs return `410` and the macOS installer does not run its LaunchAgent.
+The retired in-app Cursor ACP worker, its background LaunchAgent, and its private job API have been removed. The supported image-revision workflow is the external API plus the project Skill documented below. Existing review data and external-AI task/result audit records are preserved; legacy Cursor job history remains untouched in existing local SQLite databases but is no longer executed or exposed by the application.
 
 ## UI structure and refresh persistence
 
@@ -258,7 +251,7 @@ Do not restore an old database over a running service. If an external applicatio
 cd /Users/wenwendemac/project/amazon/image-reviewer
 .venv/bin/pip install -r requirements.txt
 .venv/bin/pytest -q
-.venv/bin/python -m compileall -q app tests run.py ai_worker.py tools
+.venv/bin/python -m compileall -q app tests run.py tools
 node --check static/app.js
 bash -n install-macos.sh
 ```

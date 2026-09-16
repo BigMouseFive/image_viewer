@@ -13,14 +13,12 @@ from app.scanner import refresh_asset, scan
 from app.inventory import apply_product_exceptions, attach_references, filter_inventory, reconcile, reference_images
 from app.iopaint import backup_asset, resolve_editable_asset
 from app.main import (
-    AIRevisionBatch,
     attach_delivery_eligibility,
     delivery_counts,
     delivery_filter_matches,
     delivery_slots_and_errors,
     delivery_sort_key,
 )
-from app.ai_revision.service import RevisionJobError, instructions_hash, validate_candidate
 
 
 def make_source(db, path):
@@ -458,50 +456,6 @@ def test_suggestions_can_be_created_updated_moved_and_soft_deleted(tmp_path):
     with pytest.raises(KeyError):
         db.update_suggestion(second["id"], "已删除", "不能更新")
 
-
-def test_ai_revision_batch_limits_request_to_twenty_assets():
-    assert AIRevisionBatch(asset_ids=list(range(20))).asset_ids == list(range(20))
-    with pytest.raises(ValueError):
-        AIRevisionBatch(asset_ids=list(range(21)))
-
-
-def test_ai_revision_job_is_deduplicated_while_active_and_can_retry_after_failure(tmp_path):
-    db = Database(tmp_path / "reviews.db")
-    root = tmp_path / "images"
-    source_id = make_source(db, root)
-    asset = {
-        "id": 10, "sku": "SKU-1", "module": "SKU-1_A+L01", "relative_path": "SKU-1/SKU-1_A+L01.png",
-        "revision": 2, "sha256": "a" * 64,
-    }
-    with db.connect() as con:
-        con.execute(
-            """INSERT INTO assets(id,source_id,sku,module,relative_path,size,mtime,sha256,width,height,revision,status,comments,reviewed_revision,discovered_at,updated_at,missing)
-               VALUES(?,?,?,?,?,1,1,?,970,600,2,'needs_revision','fix text',2,?,?,0)""",
-            (10, source_id, asset["sku"], asset["module"], asset["relative_path"], asset["sha256"], "now", "now"),
-        )
-    first, created = db.create_ai_job(source_id, asset, "_refs/SKU-1.jpg", ["fix text"], instructions_hash("fix text"))
-    duplicate, duplicate_created = db.create_ai_job(source_id, asset, "_refs/SKU-1.jpg", ["fix text"], instructions_hash("fix text"))
-    assert created is True
-    assert duplicate_created is False
-    assert duplicate["id"] == first["id"]
-    db.update_ai_job(first["id"], "failed", error_message="test", completed=True)
-    retry, retry_created = db.create_ai_job(source_id, asset, "_refs/SKU-1.jpg", ["fix text"], instructions_hash("fix text"))
-    assert retry_created is True
-    assert retry["id"] != first["id"]
-
-
-def test_ai_candidate_validation_requires_changed_970_by_600_png(tmp_path):
-    source = tmp_path / "source.png"
-    candidate = tmp_path / "candidate.png"
-    write_image(source, "red", (970, 600))
-    candidate.parent.mkdir(parents=True, exist_ok=True)
-    Image.effect_noise((970, 600), 64).convert("RGB").save(candidate)
-    result = validate_candidate(candidate, __import__("hashlib").sha256(source.read_bytes()).hexdigest())
-    assert (result["width"], result["height"]) == (970, 600)
-
-    Image.effect_noise((970, 300), 64).convert("RGB").save(candidate)
-    with pytest.raises(RevisionJobError, match="970×600"):
-        validate_candidate(candidate, "different")
 
 
 def test_iopaint_asset_resolution_rejects_escape_symlink_and_missing_file(tmp_path):
